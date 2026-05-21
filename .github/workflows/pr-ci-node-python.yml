@@ -1,0 +1,181 @@
+name: Reusable PR CI - Node Python
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      python_version:
+        required: true
+        type: string
+      node_version:
+        required: true
+        type: string
+      backend_dir:
+        required: true
+        type: string
+      frontend_dir:
+        required: true
+        type: string
+      backend_dependency_file:
+        required: true
+        type: string
+      frontend_lockfile:
+        required: true
+        type: string
+      backend_fast_suite:
+        required: true
+        type: string
+      backend_migration_suite:
+        required: true
+        type: string
+      backend_ci_command:
+        required: true
+        type: string
+      migration_check_command:
+        required: true
+        type: string
+      frontend_ci_command:
+        required: true
+        type: string
+      postgres_image:
+        required: false
+        type: string
+        default: postgres:15
+      postgres_db:
+        required: false
+        type: string
+        default: app_ci
+      postgres_user:
+        required: false
+        type: string
+        default: app
+      postgres_password:
+        required: false
+        type: string
+        default: app
+      artifact_retention_days:
+        required: false
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  backend-fast-tests:
+    name: backend-fast-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.backend_dependency_file }}
+
+      - name: Install backend dependencies
+        run: python -m pip install -r "${{ inputs.backend_dependency_file }}"
+
+      - name: Run backend fast tests
+        env:
+          BACKEND_TEST_SUITE: ${{ inputs.backend_fast_suite }}
+          PYTEST_JUNIT_XML: .artifacts/ci/backend-fast-pytest.xml
+        run: ${{ inputs.backend_ci_command }}
+
+      - name: Upload backend fast pytest report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.service_name }}-backend-fast-pytest-report
+          path: .artifacts/ci/backend-fast-pytest.xml
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact_retention_days }}
+
+  backend-migration-tests:
+    name: backend-migration-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.backend_dependency_file }}
+
+      - name: Install backend dependencies
+        run: python -m pip install -r "${{ inputs.backend_dependency_file }}"
+
+      - name: Run backend migration regression tests
+        env:
+          BACKEND_TEST_SUITE: ${{ inputs.backend_migration_suite }}
+          PYTEST_JUNIT_XML: .artifacts/ci/backend-migration-pytest.xml
+        run: ${{ inputs.backend_ci_command }}
+
+      - name: Upload backend migration pytest report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.service_name }}-backend-migration-pytest-report
+          path: .artifacts/ci/backend-migration-pytest.xml
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact_retention_days }}
+
+  backend-migration:
+    name: backend-migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: ${{ inputs.postgres_image }}
+        env:
+          POSTGRES_DB: ${{ inputs.postgres_db }}
+          POSTGRES_USER: ${{ inputs.postgres_user }}
+          POSTGRES_PASSWORD: ${{ inputs.postgres_password }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ${{ inputs.postgres_user }} -d ${{ inputs.postgres_db }}"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://${{ inputs.postgres_user }}:${{ inputs.postgres_password }}@localhost:5432/${{ inputs.postgres_db }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.backend_dependency_file }}
+
+      - name: Install backend dependencies
+        run: python -m pip install -r "${{ inputs.backend_dependency_file }}"
+
+      - name: Run migration and schema drift check
+        run: ${{ inputs.migration_check_command }}
+
+  frontend-checks:
+    name: frontend-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.frontend_lockfile }}
+
+      - name: Run frontend checks
+        run: ${{ inputs.frontend_ci_command }}

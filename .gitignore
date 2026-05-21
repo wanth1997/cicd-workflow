@@ -1,0 +1,33 @@
+# Local/private planning drafts that existed before this public repo was initialized.
+# Keep them untracked unless they are reviewed and sanitized for public release.
+docs/README.md
+docs/ci-cd/
+docs/ci-cd-platform-plan.md
+
+# Secrets and runtime environment files must never be committed.
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*_rsa
+*_ed25519
+id_rsa*
+id_ed25519*
+known_hosts*
+
+# Logs, generated artifacts, databases, and local build output.
+*.log
+*.sqlite
+*.sqlite3
+*.db
+.artifacts/
+dist/
+build/
+node_modules/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

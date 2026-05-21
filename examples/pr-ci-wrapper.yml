@@ -1,0 +1,26 @@
+name: PR CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pr-ci:
+    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.1.0
+    with:
+      service_name: example-service
+      python_version: "3.11"
+      node_version: "24"
+      backend_dir: backend
+      frontend_dir: frontend
+      backend_dependency_file: backend/requirements.txt
+      frontend_lockfile: frontend/package-lock.json
+      backend_fast_suite: fast
+      backend_migration_suite: migration
+      backend_ci_command: ./ops/ci-cd/scripts/run-backend-ci.sh
+      migration_check_command: ./ops/ci-cd/scripts/run-backend-migration-check.sh
+      frontend_ci_command: ./ops/ci-cd/scripts/run-frontend-ci.sh
