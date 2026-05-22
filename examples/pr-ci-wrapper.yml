@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   pr-ci:
-    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.1.0
+    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.3.0
     with:
       service_name: example-service
       python_version: "3.11"
@@ -24,3 +24,8 @@ jobs:
       backend_ci_command: ./ops/ci-cd/scripts/run-backend-ci.sh
       migration_check_command: ./ops/ci-cd/scripts/run-backend-migration-check.sh
       frontend_ci_command: ./ops/ci-cd/scripts/run-frontend-ci.sh
+      postgres_image: postgres:15
+      postgres_db: example_ci
+      postgres_user: example
+      postgres_password: example
+      artifact_retention_days: 14
