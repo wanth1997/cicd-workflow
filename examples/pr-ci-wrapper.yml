@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   pr-ci:
-    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.3.0
+    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.4.0
     with:
       service_name: example-service
       python_version: "3.11"
