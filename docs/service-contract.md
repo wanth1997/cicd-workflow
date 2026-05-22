@@ -77,9 +77,11 @@ When a service migrates from local workflow YAML to reusable workflows:
 | Workflow | Status | Secrets | Production impact |
 |---|---|---|---|
 | `pr-ci-node-python.yml` | active | none | none |
-| `release-candidate-node-python.yml` | draft | none | none |
-| `deploy-dry-run-artifact.yml` | draft | none | none |
+| `release-candidate-node-python.yml` | active | none | none |
+| `deploy-dry-run-artifact.yml` | active | none | none |
+| `deploy-staging-artifact.yml` | active for runner-local staging proof | none | none |
 
-Remote staging and production deploy workflows are intentionally not part of
-the current reusable surface. They should be extracted only after the consuming
-service has proven staging, rollback, and production approval behavior.
+Remote SSH staging and production deploy workflows are intentionally not part
+of the current reusable surface. They should be extracted only after the
+consuming service has proven staging, rollback, and production approval
+behavior.

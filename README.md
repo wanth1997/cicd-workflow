@@ -16,6 +16,8 @@ target server.
   for Python backend test shards plus Node frontend checks.
 - `deploy-dry-run-artifact.yml`: reusable runner-local artifact install
   rehearsal with no remote server access.
+- `deploy-staging-artifact.yml`: reusable runner-local staging proof from an
+  existing Release Candidate artifact, with no SSH or production access.
 - Public service contract docs for future reusable workflow extraction.
 - Public safety policy for secrets and environment data.
 
@@ -37,14 +39,15 @@ target server.
 3. [`docs/reusable-workflows/pr-ci-node-python.md`](./docs/reusable-workflows/pr-ci-node-python.md)
 4. [`docs/reusable-workflows/release-candidate-node-python.md`](./docs/reusable-workflows/release-candidate-node-python.md)
 5. [`docs/reusable-workflows/deploy-dry-run-artifact.md`](./docs/reusable-workflows/deploy-dry-run-artifact.md)
-6. [`examples/pr-ci-wrapper.yml`](./examples/pr-ci-wrapper.yml)
+6. [`docs/reusable-workflows/deploy-staging-artifact.md`](./docs/reusable-workflows/deploy-staging-artifact.md)
+7. [`examples/pr-ci-wrapper.yml`](./examples/pr-ci-wrapper.yml)
 
 ## Versioning
 
 Consuming services should pin reusable workflows by tag:
 
 ```yaml
-uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.1.0
+uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.3.0
 ```
 
 Do not consume workflows from a moving `main` branch.
