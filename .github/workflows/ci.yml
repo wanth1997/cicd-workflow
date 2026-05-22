@@ -1,0 +1,149 @@
+name: Public Repo CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: public-repo-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate-public-repo
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Parse workflow YAML
+        run: |
+          set -euo pipefail
+          ruby -e '
+            require "yaml"
+            files = Dir[".github/workflows/*.yml"].sort
+            abort("No workflow YAML files found") if files.empty?
+            files.each do |file|
+              YAML.load_file(file)
+              puts "yaml ok: #{file}"
+            end
+          '
+
+      - name: Check public safety boundary
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          root = pathlib.Path.cwd()
+          files = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+
+          forbidden_path_patterns = [
+              (re.compile(r"(^|/)\.env($|[.])"), ".env files must stay out of this public repo"),
+              (re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)$"), "SSH private key filenames are not allowed"),
+              (re.compile(r"\.(pem|p12|pfx|key)$", re.IGNORECASE), "private key or certificate bundle files are not allowed"),
+          ]
+
+          secret_patterns = [
+              ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+              ("GitHub classic token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b")),
+              ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b")),
+              ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+              ("OpenAI API key", re.compile(r"\bsk-[A-Za-z0-9]{32,}\b")),
+              ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b")),
+              ("Telegram bot token", re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b")),
+              ("URL with embedded credentials", re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s/]+@")),
+          ]
+
+          problems = []
+          for file_name in files:
+              for pattern, message in forbidden_path_patterns:
+                  if pattern.search(file_name):
+                      problems.append(f"{file_name}: {message}")
+
+              path = root / file_name
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  continue
+
+              for label, pattern in secret_patterns:
+                  for match in pattern.finditer(text):
+                      line_no = text.count("\n", 0, match.start()) + 1
+                      problems.append(f"{file_name}:{line_no}: possible {label}")
+
+          if problems:
+              print("Public safety boundary violations found:", file=sys.stderr)
+              for problem in problems:
+                  print(f"- {problem}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"public safety scan ok: {len(files)} tracked files checked")
+          PY
+
+      - name: Check Markdown relative links
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import subprocess
+          import sys
+          from urllib.parse import unquote
+
+          root = pathlib.Path.cwd().resolve()
+          files = [
+              pathlib.Path(path)
+              for path in subprocess.check_output(["git", "ls-files", "*.md"], text=True).splitlines()
+          ]
+          link_pattern = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+          external_prefixes = ("http://", "https://", "mailto:", "#")
+          problems = []
+
+          for md_file in files:
+              text = md_file.read_text(encoding="utf-8")
+              for match in link_pattern.finditer(text):
+                  target = match.group(1).strip()
+                  if not target or target.startswith(external_prefixes):
+                      continue
+                  if target.startswith("<") and target.endswith(">"):
+                      target = target[1:-1].strip()
+                  target = target.split()[0].strip()
+                  path_part = target.split("#", 1)[0]
+                  if not path_part or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", path_part):
+                      continue
+
+                  resolved = (root / md_file.parent / unquote(path_part)).resolve()
+                  try:
+                      resolved.relative_to(root)
+                  except ValueError:
+                      line_no = text.count("\n", 0, match.start()) + 1
+                      problems.append(f"{md_file}:{line_no}: link escapes repo: {target}")
+                      continue
+
+                  if not resolved.exists():
+                      line_no = text.count("\n", 0, match.start()) + 1
+                      problems.append(f"{md_file}:{line_no}: missing link target: {target}")
+
+          if problems:
+              print("Markdown link problems found:", file=sys.stderr)
+              for problem in problems:
+                  print(f"- {problem}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"markdown links ok: {len(files)} files checked")
+          PY

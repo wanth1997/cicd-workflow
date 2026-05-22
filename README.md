@@ -18,6 +18,8 @@ target server.
   rehearsal with no remote server access.
 - `deploy-staging-artifact.yml`: reusable runner-local staging proof from an
   existing Release Candidate artifact, with no SSH or production access.
+- `ci.yml`: this public repository's own static CI for workflow YAML parsing,
+  public safety scanning, and Markdown relative link checks.
 - Public service contract docs for future reusable workflow extraction.
 - Public safety policy for secrets and environment data.
 
