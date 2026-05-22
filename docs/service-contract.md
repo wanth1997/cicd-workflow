@@ -80,8 +80,9 @@ When a service migrates from local workflow YAML to reusable workflows:
 | `release-candidate-node-python.yml` | active | none | none |
 | `deploy-dry-run-artifact.yml` | active | none | none |
 | `deploy-staging-artifact.yml` | active for runner-local staging proof | none | none |
+| `production-preflight-artifact.yml` | active for runner-local production preflight | none | none unless caller explicitly confirms a read-only health URL |
 
-Remote SSH staging and production deploy workflows are intentionally not part
-of the current reusable surface. They should be extracted only after the
+Remote SSH staging and real production deploy workflows are intentionally not
+part of the current reusable surface. They should be extracted only after the
 consuming service has proven staging, rollback, and production approval
 behavior.

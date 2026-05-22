@@ -18,6 +18,9 @@ target server.
   rehearsal with no remote server access.
 - `deploy-staging-artifact.yml`: reusable runner-local staging proof from an
   existing Release Candidate artifact, with no SSH or production access.
+- `production-preflight-artifact.yml`: reusable runner-local production
+  preflight for verifying a release artifact against staging proof before a
+  real production deploy.
 - `ci.yml`: this public repository's own static CI for workflow YAML parsing,
   public safety scanning, and Markdown relative link checks.
 - Public service contract docs for future reusable workflow extraction.
@@ -42,14 +45,15 @@ target server.
 4. [`docs/reusable-workflows/release-candidate-node-python.md`](./docs/reusable-workflows/release-candidate-node-python.md)
 5. [`docs/reusable-workflows/deploy-dry-run-artifact.md`](./docs/reusable-workflows/deploy-dry-run-artifact.md)
 6. [`docs/reusable-workflows/deploy-staging-artifact.md`](./docs/reusable-workflows/deploy-staging-artifact.md)
-7. [`examples/pr-ci-wrapper.yml`](./examples/pr-ci-wrapper.yml)
+7. [`docs/reusable-workflows/production-preflight-artifact.md`](./docs/reusable-workflows/production-preflight-artifact.md)
+8. [`examples/pr-ci-wrapper.yml`](./examples/pr-ci-wrapper.yml)
 
 ## Versioning
 
 Consuming services should pin reusable workflows by tag:
 
 ```yaml
-uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.3.0
+uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.4.0
 ```
 
 Do not consume workflows from a moving `main` branch.

@@ -1,0 +1,393 @@
+name: Reusable Production Preflight - Artifact
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      python_version:
+        required: true
+        type: string
+      release_run_id:
+        required: false
+        type: string
+        default: ""
+      staging_run_id:
+        required: false
+        type: string
+        default: ""
+      release_workflow_name:
+        required: false
+        type: string
+        default: Release Candidate
+      staging_workflow_name:
+        required: false
+        type: string
+        default: Deploy Staging
+      release_branch:
+        required: false
+        type: string
+        default: master
+      release_artifact_pattern:
+        required: true
+        type: string
+      staging_proof_artifact_prefix:
+        required: false
+        type: string
+        default: staging-deploy-
+      preflight_artifact_prefix:
+        required: false
+        type: string
+        default: production-preflight-
+      release_install_command:
+        required: true
+        type: string
+      runner_target_root:
+        required: false
+        type: string
+        default: .artifacts/production-preflight-target
+      require_remote_staging:
+        required: false
+        type: boolean
+        default: false
+      production_base_url:
+        required: false
+        type: string
+        default: ""
+      confirm_production_health_check:
+        required: false
+        type: string
+        default: ""
+      health_check_command:
+        required: false
+        type: string
+        default: ""
+      artifact_retention_days:
+        required: false
+        type: number
+        default: 14
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  production-preflight:
+    name: production-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Resolve release candidate run
+        id: release_run
+        env:
+          RELEASE_RUN_ID_INPUT: ${{ inputs.release_run_id }}
+          RELEASE_WORKFLOW_NAME: ${{ inputs.release_workflow_name }}
+          RELEASE_BRANCH: ${{ inputs.release_branch }}
+        run: |
+          set -euo pipefail
+          release_run_id="$RELEASE_RUN_ID_INPUT"
+          if [[ -z "$release_run_id" ]]; then
+            release_run_id="$(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow "$RELEASE_WORKFLOW_NAME" \
+                --branch "$RELEASE_BRANCH" \
+                --status success \
+                --limit 1 \
+                --json databaseId \
+                --jq '.[0].databaseId'
+            )"
+          fi
+          if [[ -z "$release_run_id" || "$release_run_id" == "null" ]]; then
+            echo "Could not resolve a successful $RELEASE_WORKFLOW_NAME run." >&2
+            exit 1
+          fi
+
+          conclusion="$(gh run view "$release_run_id" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion')"
+          if [[ "$conclusion" != "success" ]]; then
+            echo "$RELEASE_WORKFLOW_NAME run $release_run_id is not successful: $conclusion" >&2
+            exit 1
+          fi
+
+          echo "release_run_id=$release_run_id" >> "$GITHUB_OUTPUT"
+          echo "Using $RELEASE_WORKFLOW_NAME run: $release_run_id"
+
+      - name: Resolve staging proof
+        id: staging_run
+        env:
+          RELEASE_RUN_ID: ${{ steps.release_run.outputs.release_run_id }}
+          STAGING_RUN_ID_INPUT: ${{ inputs.staging_run_id }}
+          STAGING_WORKFLOW_NAME: ${{ inputs.staging_workflow_name }}
+          RELEASE_BRANCH: ${{ inputs.release_branch }}
+          STAGING_PROOF_ARTIFACT_PREFIX: ${{ inputs.staging_proof_artifact_prefix }}
+        run: |
+          set -euo pipefail
+          staging_run_id="$STAGING_RUN_ID_INPUT"
+          artifact_name="${STAGING_PROOF_ARTIFACT_PREFIX}${RELEASE_RUN_ID}"
+
+          artifact_count_for_run() {
+            local run_id="$1"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+              --jq ".artifacts | map(select(.name == \"$artifact_name\" and .expired == false)) | length"
+          }
+
+          if [[ -n "$staging_run_id" ]]; then
+            conclusion="$(gh run view "$staging_run_id" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion')"
+            if [[ "$conclusion" != "success" ]]; then
+              echo "$STAGING_WORKFLOW_NAME run $staging_run_id is not successful: $conclusion" >&2
+              exit 1
+            fi
+            artifact_count="$(artifact_count_for_run "$staging_run_id")"
+            if [[ "$artifact_count" == "0" ]]; then
+              echo "$STAGING_WORKFLOW_NAME run $staging_run_id does not contain required artifact: $artifact_name" >&2
+              exit 1
+            fi
+          else
+            mapfile -t candidates < <(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow "$STAGING_WORKFLOW_NAME" \
+                --branch "$RELEASE_BRANCH" \
+                --status success \
+                --limit 20 \
+                --json databaseId \
+                --jq '.[].databaseId'
+            )
+
+            for candidate in "${candidates[@]}"; do
+              artifact_count="$(artifact_count_for_run "$candidate")"
+              if [[ "$artifact_count" != "0" ]]; then
+                staging_run_id="$candidate"
+                break
+              fi
+            done
+          fi
+
+          if [[ -z "$staging_run_id" ]]; then
+            echo "Could not find a successful $STAGING_WORKFLOW_NAME run with artifact: $artifact_name" >&2
+            echo "Run $STAGING_WORKFLOW_NAME for Release Candidate $RELEASE_RUN_ID before production preflight." >&2
+            exit 1
+          fi
+
+          echo "staging_run_id=$staging_run_id" >> "$GITHUB_OUTPUT"
+          echo "staging_artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "Using $STAGING_WORKFLOW_NAME run: $staging_run_id"
+          echo "Using staging proof artifact: $artifact_name"
+
+      - name: Download release artifact
+        env:
+          RELEASE_ARTIFACT_PATTERN: ${{ inputs.release_artifact_pattern }}
+        run: |
+          set -euo pipefail
+          rm -rf .artifacts/production-release
+          mkdir -p .artifacts/production-release
+          gh run download "${{ steps.release_run.outputs.release_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$RELEASE_ARTIFACT_PATTERN" \
+            --dir .artifacts/production-release
+
+          manifest="$(find .artifacts/production-release -name release-manifest.json -type f | head -n 1)"
+          if [[ -z "$manifest" ]]; then
+            echo "Downloaded release artifact does not contain release-manifest.json" >&2
+            find .artifacts/production-release -maxdepth 3 -type f >&2
+            exit 1
+          fi
+          release_dir="$(dirname "$manifest")"
+          echo "RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
+          echo "RELEASE_MANIFEST=$manifest" >> "$GITHUB_ENV"
+          echo "Downloaded release artifact into: $release_dir"
+
+      - name: Download staging proof artifact
+        run: |
+          set -euo pipefail
+          rm -rf .artifacts/production-staging-proof
+          mkdir -p .artifacts/production-staging-proof
+          gh run download "${{ steps.staging_run.outputs.staging_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${{ steps.staging_run.outputs.staging_artifact_name }}" \
+            --dir .artifacts/production-staging-proof
+
+          staging_manifest="$(find .artifacts/production-staging-proof -name release-manifest.json -type f | head -n 1)"
+          staging_audit="$(find .artifacts/production-staging-proof -name deploy-audit.json -type f | head -n 1)"
+          staging_proof="$(find .artifacts/production-staging-proof -name staging-proof.json -type f | head -n 1)"
+          if [[ -z "$staging_manifest" || -z "$staging_audit" || -z "$staging_proof" ]]; then
+            echo "Staging proof artifact must contain staging-proof.json, release-manifest.json, and deploy-audit.json" >&2
+            find .artifacts/production-staging-proof -maxdepth 3 -type f >&2
+            echo "Rerun Deploy Staging for Release Candidate ${{ steps.release_run.outputs.release_run_id }} if this is an older staging artifact." >&2
+            exit 1
+          fi
+          echo "STAGING_MANIFEST=$staging_manifest" >> "$GITHUB_ENV"
+          echo "STAGING_AUDIT=$staging_audit" >> "$GITHUB_ENV"
+          echo "STAGING_PROOF=$staging_proof" >> "$GITHUB_ENV"
+          echo "Downloaded staging proof artifact from run: ${{ steps.staging_run.outputs.staging_run_id }}"
+
+      - name: Verify staging proof matches release
+        env:
+          RELEASE_RUN_ID: ${{ steps.release_run.outputs.release_run_id }}
+          STAGING_RUN_ID: ${{ steps.staging_run.outputs.staging_run_id }}
+          REQUIRE_REMOTE_STAGING: ${{ inputs.require_remote_staging }}
+        run: |
+          python - "$RELEASE_MANIFEST" "$STAGING_PROOF" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          proof = json.load(open(sys.argv[2], encoding="utf-8"))
+          staging_root = Path(".artifacts/production-staging-proof")
+          manifests = sorted(staging_root.rglob("release-manifest.json"))
+          audits = sorted(staging_root.rglob("deploy-audit.json"))
+
+          if not manifests:
+              raise SystemExit("Staging proof artifact has no release-manifest.json")
+          if not audits:
+              raise SystemExit("Staging proof artifact has no deploy-audit.json")
+
+          for path in manifests:
+              staging_manifest = json.load(open(path, encoding="utf-8"))
+              if release != staging_manifest:
+                  raise SystemExit(f"Staging proof manifest does not match release manifest: {path}")
+
+          matching_audits = []
+          for path in audits:
+              audit = json.load(open(path, encoding="utf-8"))
+              if audit.get("release_id") == release.get("release_id"):
+                  matching_audits.append((path, audit))
+          if not matching_audits:
+              raise SystemExit("No staging deploy audit release_id matches the release manifest.")
+
+          expected = {
+              "release_run_id": os.environ["RELEASE_RUN_ID"],
+              "release_id": release["release_id"],
+              "git_sha": release["git_sha"],
+              "alembic_head": release["database"]["alembic_head"],
+          }
+          for key, expected_value in expected.items():
+              if str(proof.get(key)) != str(expected_value):
+                  raise SystemExit(
+                      f"Staging proof {key} mismatch: expected {expected_value!r}, got {proof.get(key)!r}"
+                  )
+
+          if str(proof.get("workflow_run_id")) != os.environ["STAGING_RUN_ID"]:
+              raise SystemExit("Staging proof workflow_run_id does not match selected Deploy Staging run.")
+
+          deploy_target = proof.get("deploy_target")
+          if deploy_target not in {"runner-local", "remote-ssh"}:
+              raise SystemExit(f"Unknown staging deploy_target in proof: {deploy_target!r}")
+
+          if os.environ["REQUIRE_REMOTE_STAGING"] == "true":
+              if deploy_target != "remote-ssh" or proof.get("remote_deployed") is not True:
+                  raise SystemExit("Production preflight requires remote-ssh staging proof for this run.")
+
+          print(
+              "staging proof ok: "
+              f"release_id={release['release_id']} "
+              f"git_sha={release['git_sha']} "
+              f"deploy_target={deploy_target}"
+          )
+          PY
+
+      - name: Install release into runner-local production preflight target
+        env:
+          PYTHON_BIN: python
+          RELEASE_INSTALL_COMMAND: ${{ inputs.release_install_command }}
+          RUNNER_TARGET_ROOT: ${{ inputs.runner_target_root }}
+        run: |
+          "$RELEASE_INSTALL_COMMAND" \
+            --release-dir "$RELEASE_DIR" \
+            --target-root "$RUNNER_TARGET_ROOT" \
+            --skip-migrations \
+            --no-restart
+
+      - name: Verify production preflight install shape
+        env:
+          RUNNER_TARGET_ROOT: ${{ inputs.runner_target_root }}
+        run: |
+          test -L "$RUNNER_TARGET_ROOT/current"
+          test -f "$RUNNER_TARGET_ROOT/current/release-manifest.json"
+          test -f "$RUNNER_TARGET_ROOT/current/deploy-audit.json"
+          test -d "$RUNNER_TARGET_ROOT/current/backend"
+          test -d "$RUNNER_TARGET_ROOT/current/frontend-dist"
+          python -m json.tool "$RUNNER_TARGET_ROOT/current/release-manifest.json" >/dev/null
+          python -m json.tool "$RUNNER_TARGET_ROOT/current/deploy-audit.json" >/dev/null
+          echo "production_preflight_current=$(readlink "$RUNNER_TARGET_ROOT/current")"
+
+      - name: Optional production health check
+        if: ${{ inputs.production_base_url != '' }}
+        env:
+          BASE_URL: ${{ inputs.production_base_url }}
+          CONFIRM_PRODUCTION_HEALTH_CHECK: ${{ inputs.confirm_production_health_check }}
+          HEALTH_CHECK_COMMAND: ${{ inputs.health_check_command }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_PRODUCTION_HEALTH_CHECK" != "CALL_PRODUCTION_HEALTH" ]]; then
+            echo "Refusing to call production without confirm_production_health_check=CALL_PRODUCTION_HEALTH" >&2
+            exit 1
+          fi
+          if [[ -z "$HEALTH_CHECK_COMMAND" ]]; then
+            echo "health_check_command is required when production_base_url is set." >&2
+            exit 1
+          fi
+          "$HEALTH_CHECK_COMMAND" "$BASE_URL"
+
+      - name: Summarize production preflight
+        if: always()
+        env:
+          RUNNER_TARGET_ROOT: ${{ inputs.runner_target_root }}
+        run: |
+          {
+            echo "### Production preflight"
+            echo ""
+            echo "- Service: \`${{ inputs.service_name }}\`"
+            echo "- Release Candidate run: \`${{ steps.release_run.outputs.release_run_id }}\`"
+            echo "- Deploy Staging run: \`${{ steps.staging_run.outputs.staging_run_id }}\`"
+            echo "- Require remote staging: \`${{ inputs.require_remote_staging }}\`"
+            echo "- Runner target root: \`$RUNNER_TARGET_ROOT\`"
+            echo "- Production URL health check: \`${{ inputs.production_base_url != '' }}\`"
+            if [[ -f "$RUNNER_TARGET_ROOT/current/release-manifest.json" ]]; then
+              python - "$RUNNER_TARGET_ROOT/current/release-manifest.json" <<'PY'
+          import json
+          import sys
+
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          print(f"- Release id: `{manifest['release_id']}`")
+          print(f"- Git SHA: `{manifest['git_sha']}`")
+          print(f"- Alembic head: `{manifest['database']['alembic_head']}`")
+          PY
+            fi
+            if [[ -n "${STAGING_PROOF:-}" && -f "$STAGING_PROOF" ]]; then
+              python - <<'PY'
+          import json
+          import os
+
+          proof = json.load(open(os.environ["STAGING_PROOF"], encoding="utf-8"))
+          print(f"- Staging deploy target: `{proof['deploy_target']}`")
+          print(f"- Staging smoke requested: `{proof['staging_smoke_requested']}`")
+          PY
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload production preflight artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.preflight_artifact_prefix }}${{ steps.release_run.outputs.release_run_id }}
+          path: |
+            ${{ inputs.runner_target_root }}/current/release-manifest.json
+            ${{ inputs.runner_target_root }}/current/deploy-audit.json
+            .artifacts/production-staging-proof/**/staging-proof.json
+            .artifacts/production-staging-proof/**/deploy-audit.json
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact_retention_days }}
