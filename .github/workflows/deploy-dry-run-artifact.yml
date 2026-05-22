@@ -1,0 +1,127 @@
+name: Reusable Deploy Dry Run - Artifact
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      python_version:
+        required: true
+        type: string
+      node_version:
+        required: true
+        type: string
+      backend_dependency_file:
+        required: true
+        type: string
+      frontend_lockfile:
+        required: true
+        type: string
+      run_backend_fast_tests:
+        required: false
+        type: boolean
+        default: true
+      backend_fast_suite:
+        required: true
+        type: string
+      backend_ci_command:
+        required: true
+        type: string
+      build_release_command:
+        required: true
+        type: string
+      release_install_command:
+        required: true
+        type: string
+      dry_run_target_root:
+        required: false
+        type: string
+        default: .artifacts/deploy-target
+      require_clean:
+        required: false
+        type: string
+        default: "1"
+      artifact_retention_days:
+        required: false
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy-dry-run:
+    name: deploy-dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.backend_dependency_file }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.frontend_lockfile }}
+
+      - name: Install backend dependencies
+        run: python -m pip install -r "${{ inputs.backend_dependency_file }}"
+
+      - name: Run backend fast tests
+        if: ${{ inputs.run_backend_fast_tests }}
+        env:
+          BACKEND_TEST_SUITE: ${{ inputs.backend_fast_suite }}
+          PYTEST_JUNIT_XML: .artifacts/ci/deploy-dry-run-backend-fast.xml
+        run: ${{ inputs.backend_ci_command }}
+
+      - name: Build release artifact
+        id: build
+        env:
+          REQUIRE_CLEAN: ${{ inputs.require_clean }}
+        run: ${{ inputs.build_release_command }}
+
+      - name: Install release artifact into dry-run target
+        env:
+          PYTHON_BIN: python
+          RELEASE_INSTALL_COMMAND: ${{ inputs.release_install_command }}
+          DRY_RUN_TARGET_ROOT: ${{ inputs.dry_run_target_root }}
+        run: |
+          "$RELEASE_INSTALL_COMMAND" \
+            --release-dir "${{ steps.build.outputs.release_dir }}" \
+            --target-root "$DRY_RUN_TARGET_ROOT" \
+            --skip-migrations \
+            --no-restart
+
+      - name: Verify dry-run install shape
+        env:
+          DRY_RUN_TARGET_ROOT: ${{ inputs.dry_run_target_root }}
+        run: |
+          test -L "$DRY_RUN_TARGET_ROOT/current"
+          test -f "$DRY_RUN_TARGET_ROOT/current/release-manifest.json"
+          test -f "$DRY_RUN_TARGET_ROOT/current/deploy-audit.json"
+          python -m json.tool "$DRY_RUN_TARGET_ROOT/current/release-manifest.json" >/dev/null
+          python -m json.tool "$DRY_RUN_TARGET_ROOT/current/deploy-audit.json" >/dev/null
+          echo "dry_run_release_id=${{ steps.build.outputs.release_id }}"
+          echo "dry_run_current=$(readlink "$DRY_RUN_TARGET_ROOT/current")"
+
+      - name: Upload deploy dry-run artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.service_name }}-deploy-dry-run-${{ steps.build.outputs.release_id || github.run_id }}
+          path: |
+            ${{ steps.build.outputs.release_dir }}
+            ${{ inputs.dry_run_target_root }}/current/release-manifest.json
+            ${{ inputs.dry_run_target_root }}/current/deploy-audit.json
+            .artifacts/ci/deploy-dry-run-backend-fast.xml
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact_retention_days }}

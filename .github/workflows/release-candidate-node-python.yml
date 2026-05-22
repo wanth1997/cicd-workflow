@@ -1,0 +1,248 @@
+name: Reusable Release Candidate - Node Python
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      python_version:
+        required: true
+        type: string
+      node_version:
+        required: true
+        type: string
+      backend_dependency_file:
+        required: true
+        type: string
+      frontend_lockfile:
+        required: true
+        type: string
+      backend_shards_json:
+        required: true
+        type: string
+      backend_ci_command:
+        required: true
+        type: string
+      migration_check_command:
+        required: true
+        type: string
+      frontend_ci_command:
+        required: true
+        type: string
+      build_release_command:
+        required: true
+        type: string
+      release_artifact_prefix:
+        required: true
+        type: string
+      postgres_image:
+        required: false
+        type: string
+        default: postgres:15
+      postgres_db:
+        required: false
+        type: string
+        default: app_ci
+      postgres_user:
+        required: false
+        type: string
+        default: app
+      postgres_password:
+        required: false
+        type: string
+        default: app
+      require_clean:
+        required: false
+        type: string
+        default: "1"
+      artifact_retention_days:
+        required: false
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  backend-full-tests:
+    name: backend-full-tests (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(inputs.backend_shards_json) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.backend_dependency_file }}
+
+      - name: Install backend dependencies
+        run: python -m pip install -r "${{ inputs.backend_dependency_file }}"
+
+      - name: Run backend tests
+        env:
+          BACKEND_TEST_SUITE: ${{ matrix.suite }}
+          PYTEST_JUNIT_XML: .artifacts/ci/${{ matrix.report }}
+        run: ${{ inputs.backend_ci_command }}
+
+      - name: Summarize backend shard
+        if: always()
+        env:
+          BACKEND_TEST_SHARD: ${{ matrix.shard }}
+          BACKEND_TEST_SUITE: ${{ matrix.suite }}
+          PYTEST_JUNIT_XML: .artifacts/ci/${{ matrix.report }}
+        run: |
+          if [[ ! -f "$PYTEST_JUNIT_XML" ]]; then
+            echo "### Backend shard: $BACKEND_TEST_SHARD" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No pytest XML report was generated." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+          import xml.etree.ElementTree as ET
+
+          path = os.environ["PYTEST_JUNIT_XML"]
+          root = ET.parse(path).getroot()
+          cases = list(root.iter("testcase"))
+          failures = list(root.iter("failure"))
+          errors = list(root.iter("error"))
+          skipped = list(root.iter("skipped"))
+          total_time = sum(float(case.attrib.get("time", "0") or 0) for case in cases)
+          slowest = sorted(
+              (
+                  (
+                      float(case.attrib.get("time", "0") or 0),
+                      case.attrib.get("classname", ""),
+                      case.attrib.get("name", ""),
+                  )
+                  for case in cases
+              ),
+              reverse=True,
+          )[:10]
+
+          print(f"### Backend shard: {os.environ['BACKEND_TEST_SHARD']}")
+          print("")
+          print(f"- Suite: `{os.environ['BACKEND_TEST_SUITE']}`")
+          print(f"- Tests: `{len(cases)}`")
+          print(f"- Time: `{total_time:.2f}s`")
+          print(f"- Failures: `{len(failures)}`")
+          print(f"- Errors: `{len(errors)}`")
+          print(f"- Skipped: `{len(skipped)}`")
+          print("")
+          print("| Time | Test |")
+          print("| ---: | --- |")
+          for seconds, classname, name in slowest:
+              test_name = f"{classname}.{name}" if classname else name
+              print(f"| {seconds:.2f}s | `{test_name}` |")
+          PY
+
+      - name: Upload backend pytest report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.service_name }}-backend-full-${{ matrix.shard }}-pytest-report
+          path: .artifacts/ci/${{ matrix.report }}
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact_retention_days }}
+
+  backend-migration:
+    name: backend-migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: ${{ inputs.postgres_image }}
+        env:
+          POSTGRES_DB: ${{ inputs.postgres_db }}
+          POSTGRES_USER: ${{ inputs.postgres_user }}
+          POSTGRES_PASSWORD: ${{ inputs.postgres_password }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ${{ inputs.postgres_user }} -d ${{ inputs.postgres_db }}"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://${{ inputs.postgres_user }}:${{ inputs.postgres_password }}@localhost:5432/${{ inputs.postgres_db }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.backend_dependency_file }}
+
+      - name: Install backend dependencies
+        run: python -m pip install -r "${{ inputs.backend_dependency_file }}"
+
+      - name: Run migration and schema drift check
+        run: ${{ inputs.migration_check_command }}
+
+  frontend-checks:
+    name: frontend-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.frontend_lockfile }}
+
+      - name: Run frontend checks
+        run: ${{ inputs.frontend_ci_command }}
+
+  build-release:
+    name: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - backend-full-tests
+      - backend-migration
+      - frontend-checks
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.backend_dependency_file }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.frontend_lockfile }}
+
+      - name: Install backend dependencies
+        run: python -m pip install -r "${{ inputs.backend_dependency_file }}"
+
+      - name: Build release artifact
+        id: build
+        env:
+          REQUIRE_CLEAN: ${{ inputs.require_clean }}
+        run: ${{ inputs.build_release_command }}
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.release_artifact_prefix }}${{ steps.build.outputs.release_id }}
+          path: ${{ steps.build.outputs.release_dir }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.artifact_retention_days }}

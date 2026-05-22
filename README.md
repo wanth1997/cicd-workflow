@@ -12,6 +12,10 @@ target server.
 
 - `pr-ci-node-python.yml`: reusable PR CI workflow for a Python backend plus
   Node frontend service.
+- `release-candidate-node-python.yml`: reusable release artifact build workflow
+  for Python backend test shards plus Node frontend checks.
+- `deploy-dry-run-artifact.yml`: reusable runner-local artifact install
+  rehearsal with no remote server access.
 - Public service contract docs for future reusable workflow extraction.
 - Public safety policy for secrets and environment data.
 
@@ -31,7 +35,9 @@ target server.
 1. [`docs/public-repo-policy.md`](./docs/public-repo-policy.md)
 2. [`docs/service-contract.md`](./docs/service-contract.md)
 3. [`docs/reusable-workflows/pr-ci-node-python.md`](./docs/reusable-workflows/pr-ci-node-python.md)
-4. [`examples/pr-ci-wrapper.yml`](./examples/pr-ci-wrapper.yml)
+4. [`docs/reusable-workflows/release-candidate-node-python.md`](./docs/reusable-workflows/release-candidate-node-python.md)
+5. [`docs/reusable-workflows/deploy-dry-run-artifact.md`](./docs/reusable-workflows/deploy-dry-run-artifact.md)
+6. [`examples/pr-ci-wrapper.yml`](./examples/pr-ci-wrapper.yml)
 
 ## Versioning
 
