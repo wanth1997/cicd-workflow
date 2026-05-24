@@ -2,7 +2,7 @@
 
 > Status: draft reusable workflow
 >
-> Last updated: 2026-05-22
+> Last updated: 2026-05-24
 
 Reusable Release Candidate workflow for a service with:
 
@@ -20,14 +20,20 @@ The workflow has no secrets and no deploy behavior.
 | `backend-full-tests` | Run full backend test shards from `backend_shards_json`. |
 | `backend-migration` | Run fresh PostgreSQL migration and schema drift check. |
 | `frontend-checks` | Run frontend install / lint / tests / build through a service-owned script. |
-| `build-release` | Build and upload the release artifact after checks pass. |
+| `build-release` | Build and upload the release artifact after migration and frontend checks pass. It runs in parallel with backend full-test shards to shorten the Release Candidate critical path. |
+
+`build-release` intentionally does not wait for `backend-full-tests`. The
+overall Release Candidate run is still unsuccessful if any full-test shard
+fails, so consumers must only deploy artifacts from successful Release
+Candidate runs. The reusable staging and production preflight workflows enforce
+that check when resolving a release run.
 
 ## Wrapper Example
 
 ```yaml
 jobs:
   release-candidate:
-    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-node-python.yml@v0.2.0
+    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-node-python.yml@v0.5.0
     with:
       service_name: ppclub
       python_version: "3.11"

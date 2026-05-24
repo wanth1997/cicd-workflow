@@ -53,7 +53,7 @@ target server.
 Consuming services should pin reusable workflows by tag:
 
 ```yaml
-uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.4.0
+uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.5.0
 ```
 
 Do not consume workflows from a moving `main` branch.
