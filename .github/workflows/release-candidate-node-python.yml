@@ -212,7 +212,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs:
-      - backend-full-tests
       - backend-migration
       - frontend-checks
     steps:
