@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   pr-ci:
-    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.4.0
+    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.7.0
     with:
       service_name: example-service
       python_version: "3.11"
@@ -21,6 +21,12 @@ jobs:
       frontend_lockfile: frontend/package-lock.json
       backend_fast_suite: fast
       backend_migration_suite: migration
+      run_backend_full_tests: true
+      backend_full_shards_json: >
+        [
+          {"shard":"api","suite":"full-api","report":"backend-full-api-pytest.xml"},
+          {"shard":"domain","suite":"full-domain","report":"backend-full-domain-pytest.xml"}
+        ]
       backend_ci_command: ./ops/ci-cd/scripts/run-backend-ci.sh
       migration_check_command: ./ops/ci-cd/scripts/run-backend-migration-check.sh
       frontend_ci_command: ./ops/ci-cd/scripts/run-frontend-ci.sh
@@ -29,3 +35,7 @@ jobs:
       postgres_user: example
       postgres_password: example
       artifact_retention_days: 14
+      telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+      telegram_notify_on: failure
+    secrets:
+      telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}

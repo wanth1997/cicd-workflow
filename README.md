@@ -15,9 +15,9 @@ target server.
 - `pr-ci-go-node.yml`: reusable PR CI workflow for a Go backend plus Node
   frontend service.
 - `release-candidate-node-python.yml`: reusable release artifact build workflow
-  for Python backend test shards plus Node frontend checks.
+  with optional Python backend test shards plus Node frontend checks.
 - `release-candidate-go-node.yml`: reusable release artifact build workflow for
-  Go backend test shards plus Node frontend checks.
+  optional Go backend test shards plus Node frontend checks.
 - `deploy-dry-run-artifact.yml`: reusable runner-local artifact install
   rehearsal with no remote server access.
 - `deploy-staging-artifact.yml`: reusable runner-local staging proof from an
@@ -31,6 +31,14 @@ target server.
   services after the Linkcourt / PP Club rollout.
 - Public service contract docs for future reusable workflow extraction.
 - Public safety policy for secrets and environment data.
+
+## Optional Telegram Notifications
+
+Reusable workflows can send a final Telegram status message when the consuming
+service passes `telegram_chat_id` and the optional `telegram_bot_token` secret.
+Messages include repo, stage, workflow, status, branch, commit title, job
+results, action guidance, and direct GitHub Run URLs. Tokens and chat IDs stay
+in the consuming service repository.
 
 ## Non-Goals
 
@@ -62,7 +70,7 @@ target server.
 Consuming services should pin reusable workflows by tag:
 
 ```yaml
-uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.5.0
+uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.7.0
 ```
 
 Do not consume workflows from a moving `main` branch.

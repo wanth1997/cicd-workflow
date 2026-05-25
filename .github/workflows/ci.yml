@@ -96,6 +96,7 @@ jobs:
           PY
 
       - name: Check Markdown relative links
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
           python3 - <<'PY'

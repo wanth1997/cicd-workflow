@@ -46,6 +46,17 @@ on:
         required: false
         type: number
         default: 14
+      telegram_chat_id:
+        required: false
+        type: string
+        default: ""
+      telegram_notify_on:
+        required: false
+        type: string
+        default: failure
+    secrets:
+      telegram_bot_token:
+        required: false
 
 permissions:
   contents: read
@@ -58,6 +69,8 @@ jobs:
     name: deploy-dry-run
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      release_id: ${{ steps.build.outputs.release_id }}
     steps:
       - uses: actions/checkout@v6
 
@@ -125,3 +138,165 @@ jobs:
             .artifacts/ci/deploy-dry-run-backend-fast.xml
           if-no-files-found: ignore
           retention-days: ${{ inputs.artifact_retention_days }}
+
+  notify-telegram:
+    name: notify-telegram
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ always() }}
+    needs:
+      - deploy-dry-run
+    steps:
+      - name: Send Telegram notification
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.telegram_bot_token }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_NOTIFY_ON: ${{ inputs.telegram_notify_on }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          WORKFLOW_STAGE: Deploy Dry Run
+          RELEASE_ID: ${{ needs['deploy-dry-run'].outputs.release_id }}
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          def one_line(value, limit=140):
+              text = " ".join((value or "").strip().split())
+              if len(text) > limit:
+                  return text[: limit - 3] + "..."
+              return text
+
+          def event_payload():
+              path = os.environ.get("GITHUB_EVENT_PATH", "")
+              if not path:
+                  return {}
+              try:
+                  with open(path, encoding="utf-8") as handle:
+                      return json.load(handle)
+              except (OSError, json.JSONDecodeError):
+                  return {}
+
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+          chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+          if not token or not chat_id:
+              print("Telegram notification disabled: telegram_chat_id or telegram_bot_token is empty.")
+              raise SystemExit(0)
+
+          needs = json.loads(os.environ.get("NEEDS_JSON", "{}") or "{}")
+          job_results = {
+              job_name: job_data.get("result", "unknown")
+              for job_name, job_data in needs.items()
+          }
+          results = list(job_results.values())
+          if any(result == "failure" for result in results):
+              status = "failed"
+          elif any(result == "cancelled" for result in results):
+              status = "cancelled"
+          elif results and all(result == "success" for result in results):
+              status = "success"
+          elif any(result == "skipped" for result in results):
+              status = "skipped"
+          else:
+              status = "unknown"
+
+          notify_on = os.environ.get("TELEGRAM_NOTIFY_ON", "failure").strip().lower()
+          if notify_on not in {"always", "failure", "never"}:
+              print(f"Unsupported telegram_notify_on={notify_on!r}; using failure.")
+              notify_on = "failure"
+          should_send = notify_on == "always" or (notify_on == "failure" and status != "success")
+          if notify_on == "never" or not should_send:
+              print(f"Telegram notification skipped for status={status}.")
+              raise SystemExit(0)
+
+          event = event_payload()
+          pull_request = event.get("pull_request") or {}
+          head_commit = event.get("head_commit") or {}
+          workflow_run = event.get("workflow_run") or {}
+          workflow_head_commit = workflow_run.get("head_commit") or {}
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+          run_id = os.environ["GITHUB_RUN_ID"]
+          run_url = f"{server_url}/{repo}/actions/runs/{run_id}"
+          branch = (
+              (pull_request.get("head") or {}).get("ref")
+              or os.environ.get("GITHUB_HEAD_REF")
+              or os.environ.get("GITHUB_REF_NAME")
+              or "unknown"
+          )
+          target_branch = (
+              (pull_request.get("base") or {}).get("ref")
+              or os.environ.get("GITHUB_BASE_REF")
+              or ""
+          )
+          branch_line = f"{branch} -> {target_branch}" if target_branch else branch
+          commit_sha = (
+              (pull_request.get("head") or {}).get("sha")
+              or workflow_run.get("head_sha")
+              or os.environ.get("GITHUB_SHA", "")
+          )
+          short_sha = commit_sha[:7] if commit_sha else "unknown"
+          commit_title = one_line(
+              pull_request.get("title")
+              or head_commit.get("message")
+              or workflow_head_commit.get("message")
+          )
+          action = {
+              "success": "No action needed.",
+              "failed": "Check the failed job in the GitHub Run.",
+              "cancelled": "Check whether the cancellation was expected.",
+              "skipped": "Check workflow conditions and dependencies.",
+          }.get(status, "Check the GitHub Run.")
+
+          lines = [
+              f"[{status.upper()}] {os.environ['SERVICE_NAME']} / {os.environ['WORKFLOW_STAGE']}",
+              "",
+              f"Repo: {repo}",
+              f"Stage: {os.environ['WORKFLOW_STAGE']}",
+              f"Workflow: {os.environ.get('GITHUB_WORKFLOW', 'unknown')}",
+              f"Status: {status}",
+              f"Branch: {branch_line}",
+          ]
+          if pull_request.get("number"):
+              pr_title = one_line(pull_request.get("title"))
+              lines.append(f"PR: #{pull_request['number']} - {pr_title}")
+          if commit_title:
+              lines.append(f"Commit: {commit_title} ({short_sha})")
+          else:
+              lines.append("Commit: not available in event payload")
+          release_id = os.environ.get("RELEASE_ID", "").strip()
+          if release_id:
+              lines.append(f"Release ID: {release_id}")
+          lines.extend(
+              [
+                  f"Actor: {os.environ.get('GITHUB_ACTOR', 'unknown')}",
+                  f"Event: {os.environ.get('GITHUB_EVENT_NAME', 'unknown')}",
+                  f"Run: #{os.environ.get('GITHUB_RUN_NUMBER', 'unknown')} attempt {os.environ.get('GITHUB_RUN_ATTEMPT', '1')}",
+                  "",
+                  "Jobs:",
+              ]
+          )
+          for job_name, result in job_results.items():
+              lines.append(f"- {job_name}: {result}")
+          lines.extend(["", f"Action: {action}", "", "GitHub Run:", run_url])
+
+          payload = urllib.parse.urlencode(
+              {
+                  "chat_id": chat_id,
+                  "text": "\n".join(lines),
+                  "disable_web_page_preview": "true",
+              }
+          ).encode("utf-8")
+          request = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=payload,
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              response.read()
+          print("Telegram notification sent.")
+          PY

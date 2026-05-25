@@ -2,7 +2,7 @@
 
 > Status: active reusable workflow for runner-local production preflight
 >
-> Last updated: 2026-05-23
+> Last updated: 2026-05-25
 
 Reusable production preflight workflow for proving that a successful Release
 Candidate artifact matches a staging proof and can be installed on a GitHub
@@ -10,6 +10,8 @@ runner before a real production deploy.
 
 This workflow does not SSH to a server, run migrations, restart services, or
 deploy to production.
+Optional Telegram notifications use a caller-provided `telegram_bot_token`
+secret.
 
 ## Jobs
 
@@ -38,6 +40,22 @@ deploy to production.
 | `confirm_production_health_check` | no | empty |
 | `health_check_command` | no | empty |
 | `artifact_retention_days` | no | `14` |
+| `telegram_chat_id` | no | empty, disables Telegram |
+| `telegram_notify_on` | no | `failure` |
+
+## Secrets
+
+| Secret | Required | Purpose |
+|---|---:|---|
+| `telegram_bot_token` | no | Service repo Telegram bot token used only when `telegram_chat_id` is set. |
+
+## Telegram Notifications
+
+When enabled, the final `notify-telegram` job sends one concise status message
+with repo, stage, workflow, status, branch, commit title plus short SHA, job
+result, related Release Candidate and Deploy Staging run URLs, action guidance,
+and the current GitHub Run URL. `telegram_notify_on` accepts `failure`,
+`always`, or `never`.
 
 ## Outputs
 
@@ -94,4 +112,8 @@ jobs:
       confirm_production_health_check: ${{ inputs.confirm_production_health_check }}
       health_check_command: ./ops/ci-cd/deploy/health-check.sh
       artifact_retention_days: 14
+      telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+      telegram_notify_on: failure
+    secrets:
+      telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 ```
