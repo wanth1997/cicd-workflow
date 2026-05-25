@@ -12,8 +12,12 @@ target server.
 
 - `pr-ci-node-python.yml`: reusable PR CI workflow for a Python backend plus
   Node frontend service.
+- `pr-ci-go-node.yml`: reusable PR CI workflow for a Go backend plus Node
+  frontend service.
 - `release-candidate-node-python.yml`: reusable release artifact build workflow
   for Python backend test shards plus Node frontend checks.
+- `release-candidate-go-node.yml`: reusable release artifact build workflow for
+  Go backend test shards plus Node frontend checks.
 - `deploy-dry-run-artifact.yml`: reusable runner-local artifact install
   rehearsal with no remote server access.
 - `deploy-staging-artifact.yml`: reusable runner-local staging proof from an
@@ -23,6 +27,8 @@ target server.
   real production deploy.
 - `ci.yml`: this public repository's own static CI for workflow YAML parsing,
   public safety scanning, and Markdown relative link checks.
+- Service onboarding cookbook for applying the same CI/CD pattern to future
+  services after the Linkcourt / PP Club rollout.
 - Public service contract docs for future reusable workflow extraction.
 - Public safety policy for secrets and environment data.
 
@@ -41,12 +47,15 @@ target server.
 
 1. [`docs/public-repo-policy.md`](./docs/public-repo-policy.md)
 2. [`docs/service-contract.md`](./docs/service-contract.md)
-3. [`docs/reusable-workflows/pr-ci-node-python.md`](./docs/reusable-workflows/pr-ci-node-python.md)
-4. [`docs/reusable-workflows/release-candidate-node-python.md`](./docs/reusable-workflows/release-candidate-node-python.md)
-5. [`docs/reusable-workflows/deploy-dry-run-artifact.md`](./docs/reusable-workflows/deploy-dry-run-artifact.md)
-6. [`docs/reusable-workflows/deploy-staging-artifact.md`](./docs/reusable-workflows/deploy-staging-artifact.md)
-7. [`docs/reusable-workflows/production-preflight-artifact.md`](./docs/reusable-workflows/production-preflight-artifact.md)
-8. [`examples/pr-ci-wrapper.yml`](./examples/pr-ci-wrapper.yml)
+3. [`docs/service-onboarding-cookbook.md`](./docs/service-onboarding-cookbook.md)
+4. [`docs/reusable-workflows/pr-ci-node-python.md`](./docs/reusable-workflows/pr-ci-node-python.md)
+5. [`docs/reusable-workflows/pr-ci-go-node.md`](./docs/reusable-workflows/pr-ci-go-node.md)
+6. [`docs/reusable-workflows/release-candidate-node-python.md`](./docs/reusable-workflows/release-candidate-node-python.md)
+7. [`docs/reusable-workflows/release-candidate-go-node.md`](./docs/reusable-workflows/release-candidate-go-node.md)
+8. [`docs/reusable-workflows/deploy-dry-run-artifact.md`](./docs/reusable-workflows/deploy-dry-run-artifact.md)
+9. [`docs/reusable-workflows/deploy-staging-artifact.md`](./docs/reusable-workflows/deploy-staging-artifact.md)
+10. [`docs/reusable-workflows/production-preflight-artifact.md`](./docs/reusable-workflows/production-preflight-artifact.md)
+11. [`examples/pr-ci-wrapper.yml`](./examples/pr-ci-wrapper.yml)
 
 ## Versioning
 

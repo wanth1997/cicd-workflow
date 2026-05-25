@@ -77,7 +77,9 @@ When a service migrates from local workflow YAML to reusable workflows:
 | Workflow | Status | Secrets | Production impact |
 |---|---|---|---|
 | `pr-ci-node-python.yml` | active | none | none |
+| `pr-ci-go-node.yml` | active | none | none |
 | `release-candidate-node-python.yml` | active | none | none |
+| `release-candidate-go-node.yml` | active | none | none |
 | `deploy-dry-run-artifact.yml` | active | none | none |
 | `deploy-staging-artifact.yml` | active for runner-local staging proof | none | none |
 | `production-preflight-artifact.yml` | active for runner-local production preflight | none | none unless caller explicitly confirms a read-only health URL |
