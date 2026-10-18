@@ -46,7 +46,7 @@ Set `telegram_chat_id` from a service repo variable and pass
 ```yaml
 jobs:
   release-candidate:
-    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-node-python.yml@v0.7.0
+    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-node-python.yml@v0.8.0
     with:
       service_name: ppclub
       python_version: "3.11"

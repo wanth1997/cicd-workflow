@@ -410,7 +410,9 @@ jobs:
     name: notify-telegram
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: ${{ always() }}
+    # Skipped (not billed) when notifications are off, e.g. the caller
+    # already alerts on failures from a workflow_run listener.
+    if: ${{ always() && inputs.telegram_notify_on != 'never' }}
     needs:
       - production-preflight
     steps:
