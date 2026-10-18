@@ -32,7 +32,7 @@ Actions workflow。目標是讓每個 service 只維護自己的業務腳本與�
 - 選擇符合 runtime family 的 reusable workflow：Python backend 用
   `*-node-python.yml`，Go backend 用 `*-go-node.yml`。不要為了套用共用流程而把
   service script 寫成偽裝成另一個 runtime。
-- 所有 caller workflow 都要 pin 到 tag，例如 `@v0.7.0`。不要用 moving
+- 所有 caller workflow 都要 pin 到 tag，例如 `@v0.8.0`。不要用 moving
   `main`。
 - 先上無 secret、無遠端副作用的流程：PR CI、Release Candidate、Deploy Dry
   Run、runner-local Deploy Staging、Production Preflight。
@@ -123,6 +123,8 @@ Telegram 通知設定：
 - 在 service repo 設定 repository secret `TELEGRAM_BOT_TOKEN`。
 - `telegram_notify_on: failure` 只會在非 success 時通知；若要每次都通知，改成
   `always`。
+- `telegram_notify_on: never`（v0.8.0 起）整個 `notify-telegram` job 會被跳過，不開 runner、
+  不計 Actions 分鐘。service 已用 `workflow_run` 監聽器統一發失敗通知時用這個，避免重複通知。
 
 ### `.github/workflows/pr-ci.yml`
 
@@ -139,7 +141,7 @@ permissions:
 
 jobs:
   pr-ci:
-    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.7.0
+    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.8.0
     with:
       service_name: example-service
       python_version: "3.11"
@@ -181,7 +183,7 @@ permissions:
 
 jobs:
   release-candidate:
-    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-node-python.yml@v0.7.0
+    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-node-python.yml@v0.8.0
     with:
       service_name: example-service
       python_version: "3.11"
@@ -218,7 +220,7 @@ permissions:
 
 jobs:
   deploy-dry-run:
-    uses: wanth1997/cicd-workflow/.github/workflows/deploy-dry-run-artifact.yml@v0.7.0
+    uses: wanth1997/cicd-workflow/.github/workflows/deploy-dry-run-artifact.yml@v0.8.0
     with:
       service_name: example-service
       python_version: "3.11"
@@ -264,7 +266,7 @@ permissions:
 
 jobs:
   deploy-staging-runner-local:
-    uses: wanth1997/cicd-workflow/.github/workflows/deploy-staging-artifact.yml@v0.7.0
+    uses: wanth1997/cicd-workflow/.github/workflows/deploy-staging-artifact.yml@v0.8.0
     with:
       service_name: example-service
       python_version: "3.11"
@@ -327,7 +329,7 @@ jobs:
 
   production-preflight:
     needs: production-gate
-    uses: wanth1997/cicd-workflow/.github/workflows/production-preflight-artifact.yml@v0.7.0
+    uses: wanth1997/cicd-workflow/.github/workflows/production-preflight-artifact.yml@v0.8.0
     with:
       service_name: example-service
       python_version: "3.11"
