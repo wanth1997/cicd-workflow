@@ -52,6 +52,7 @@ notifications use a caller-provided `telegram_bot_token` secret.
 | `runner` | no | `ubuntu-latest` (one label, or a JSON label array such as `["self-hosted","Linux","X64","wsl"]`) |
 | `go_flags` | no | empty (`GOFLAGS` of the Go jobs, e.g. `-p=4`) |
 | `postgres_service_options` | no | `--memory=768m --cpus=2` |
+| `backend_host_lock` | no | empty, no lock (absolute path of a host-wide lock file, self-hosted only) |
 
 ## Secrets
 
@@ -96,6 +97,31 @@ What changes on a self-hosted runner (`runner.environment == 'self-hosted'`):
   left in the workspace `.git/config` or in `_temp`. The service commands
   must not need authenticated git.
 
+- Backend host lock (`backend_host_lock`, empty by default). Some backend
+  suites use a host-wide resource that separate jobs cannot isolate: for
+  example a test that takes a non-blocking `flock` on the topmost writable
+  directory above its `t.TempDir()`, which on Linux is `/tmp` itself, so
+  two such suites on one machine fail each other whatever their checkout,
+  `HOME` or `TMPDIR`. When `backend_host_lock` names a file, the backend
+  fast suite and each backend full shard run `backend_ci_command` under an
+  exclusive `flock` on it, so those suites run one at a time on the machine,
+  across jobs, runner installations and workflow runs. A full shard opts out
+  with `"host_lock": false` in its `backend_full_shards_json` entry; the
+  migration jobs never lock.
+  - Use one fixed path that every runner installation on the machine sees,
+    under the same `/tmp` the colliding resource lives in, e.g.
+    `/tmp/<service>-ci-backend.lock`. It is created `0644` and opened
+    read-only, so runner installations under different users share it.
+  - The wait is bounded at 20 minutes, and that bound is added to the job's
+    `timeout-minutes` (fast 12 -> 32, full 20 -> 40) only when the input is
+    set, so the wait never eats the suite's own budget. A wait that runs out
+    fails the job with a `Backend host lock` error.
+  - `flock` (util-linux) must be installed on the self-hosted runner; if it
+    is missing the job fails with an error instead of running unlocked.
+  - GitHub-hosted runners never lock, even when the input is set.
+  - Cost: locked suites run one at a time per machine. A job waiting for
+    the lock holds its runner, so other jobs may queue behind it.
+
 On every runner:
 
 - The PostgreSQL service publishes 5432 on a host port Docker picks (jobs on
@@ -112,7 +138,9 @@ On every runner:
 
 ## Version Notes
 
-- `v0.9.0`: adds `runner`, `go_flags` and `postgres_service_options`; the
+- `v0.9.0`: adds `runner`, `go_flags`, `postgres_service_options` and
+  `backend_host_lock` (host-wide flock for the backend suites on self-hosted
+  runners, opt-out per full shard with `"host_lock": false`); the
   per-job `HOME` on self-hosted runners; `persist-credentials: false` on
   checkout; and the PostgreSQL service on a Docker-picked host port, with
   `DATABASE_URL`/`TEST_DATABASE_URL` exported from it (was a fixed

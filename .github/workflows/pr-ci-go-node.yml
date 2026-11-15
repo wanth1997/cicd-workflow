@@ -95,6 +95,19 @@ on:
         required: false
         type: string
         default: --memory=768m --cpus=2
+      # Absolute path of a lock file that every runner installation on one
+      # self-hosted machine shares, e.g. /tmp/<service>-ci-backend.lock.
+      # When set, and only on a self-hosted runner, the backend fast suite
+      # and each backend full shard (unless its matrix entry has
+      # "host_lock": false) run backend_ci_command under an exclusive flock
+      # on it, so suites that use one host-wide resource (for example a
+      # flock on /tmp) run one at a time across jobs and workflow runs. The
+      # wait is bounded (20 min, added to the job's timeout) and fails the
+      # job with an error when it runs out. Empty: no lock.
+      backend_host_lock:
+        required: false
+        type: string
+        default: ""
     secrets:
       telegram_bot_token:
         required: false
@@ -109,7 +122,9 @@ jobs:
   backend-fast-tests:
     name: backend-fast-tests
     runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 12
+    # 12, plus the 20-minute bound on the backend host lock wait when
+    # backend_host_lock is set.
+    timeout-minutes: ${{ inputs.backend_host_lock != '' && 32 || 12 }}
     env:
       GOFLAGS: ${{ inputs.go_flags }}
     steps:
@@ -140,7 +155,41 @@ jobs:
         env:
           BACKEND_TEST_SUITE: ${{ inputs.backend_fast_suite }}
           GO_TEST_JSON: .artifacts/ci/backend-fast-go-test.json
-        run: ${{ inputs.backend_ci_command }}
+          BACKEND_HOST_LOCK: ${{ inputs.backend_host_lock }}
+          BACKEND_HOST_LOCK_WAIT_SECONDS: "1200"
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          # The backend_host_lock input: on a self-hosted runner, hold an
+          # exclusive flock on that file (fd 9, inherited by the command and
+          # released when the last process holding it exits) before the
+          # command starts. GitHub-hosted runners never lock.
+          if [[ -n "${BACKEND_HOST_LOCK:-}" && "${RUNNER_KIND:-}" == self-hosted && "${SHARD_HOST_LOCK:-}" != false ]]; then
+            if [[ "$BACKEND_HOST_LOCK" != /* ]]; then
+              echo "::error title=Backend host lock::backend_host_lock must be an absolute path"
+              exit 1
+            fi
+            if ! command -v flock >/dev/null 2>&1; then
+              echo "::error title=Backend host lock::flock is not installed on this self-hosted runner (util-linux); install it, or run on GitHub-hosted runners"
+              exit 1
+            fi
+            # Created world-readable, so every runner user on the machine can
+            # open it; flock needs only a read descriptor.
+            if [[ ! -e "$BACKEND_HOST_LOCK" ]]; then
+              (umask 022 && : >>"$BACKEND_HOST_LOCK") 2>/dev/null || true
+            fi
+            if ! exec 9<"$BACKEND_HOST_LOCK"; then
+              echo "::error title=Backend host lock::cannot open the lock file $BACKEND_HOST_LOCK"
+              exit 1
+            fi
+            echo "Waiting up to ${BACKEND_HOST_LOCK_WAIT_SECONDS}s for the backend host lock $BACKEND_HOST_LOCK"
+            lock_wait_started=$SECONDS
+            if ! flock -w "$BACKEND_HOST_LOCK_WAIT_SECONDS" 9; then
+              echo "::error title=Backend host lock::waited ${BACKEND_HOST_LOCK_WAIT_SECONDS}s for $BACKEND_HOST_LOCK, which another backend suite on this machine still holds; re-run later or run PR CI on GitHub-hosted runners"
+              exit 1
+            fi
+            echo "Holding the backend host lock after $((SECONDS - lock_wait_started))s"
+          fi
+          ${{ inputs.backend_ci_command }}
 
       - name: Upload backend fast Go test report
         if: always()
@@ -197,7 +246,8 @@ jobs:
     name: backend-full-tests (${{ matrix.shard }})
     if: ${{ inputs.run_backend_full_tests }}
     runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    # 20, plus the 20-minute bound on the backend host lock wait.
+    timeout-minutes: ${{ inputs.backend_host_lock != '' && 40 || 20 }}
     env:
       GOFLAGS: ${{ inputs.go_flags }}
     strategy:
@@ -229,7 +279,39 @@ jobs:
         env:
           BACKEND_TEST_SUITE: ${{ matrix.suite }}
           GO_TEST_JSON: .artifacts/ci/${{ matrix.report }}
-        run: ${{ inputs.backend_ci_command }}
+          BACKEND_HOST_LOCK: ${{ inputs.backend_host_lock }}
+          BACKEND_HOST_LOCK_WAIT_SECONDS: "1200"
+          RUNNER_KIND: ${{ runner.environment }}
+          SHARD_HOST_LOCK: ${{ matrix.host_lock }}
+        run: |
+          # Same as "Run backend fast tests", plus the shard's host_lock.
+          if [[ -n "${BACKEND_HOST_LOCK:-}" && "${RUNNER_KIND:-}" == self-hosted && "${SHARD_HOST_LOCK:-}" != false ]]; then
+            if [[ "$BACKEND_HOST_LOCK" != /* ]]; then
+              echo "::error title=Backend host lock::backend_host_lock must be an absolute path"
+              exit 1
+            fi
+            if ! command -v flock >/dev/null 2>&1; then
+              echo "::error title=Backend host lock::flock is not installed on this self-hosted runner (util-linux); install it, or run on GitHub-hosted runners"
+              exit 1
+            fi
+            # Created world-readable, so every runner user on the machine can
+            # open it; flock needs only a read descriptor.
+            if [[ ! -e "$BACKEND_HOST_LOCK" ]]; then
+              (umask 022 && : >>"$BACKEND_HOST_LOCK") 2>/dev/null || true
+            fi
+            if ! exec 9<"$BACKEND_HOST_LOCK"; then
+              echo "::error title=Backend host lock::cannot open the lock file $BACKEND_HOST_LOCK"
+              exit 1
+            fi
+            echo "Waiting up to ${BACKEND_HOST_LOCK_WAIT_SECONDS}s for the backend host lock $BACKEND_HOST_LOCK"
+            lock_wait_started=$SECONDS
+            if ! flock -w "$BACKEND_HOST_LOCK_WAIT_SECONDS" 9; then
+              echo "::error title=Backend host lock::waited ${BACKEND_HOST_LOCK_WAIT_SECONDS}s for $BACKEND_HOST_LOCK, which another backend suite on this machine still holds; re-run later or run PR CI on GitHub-hosted runners"
+              exit 1
+            fi
+            echo "Holding the backend host lock after $((SECONDS - lock_wait_started))s"
+          fi
+          ${{ inputs.backend_ci_command }}
 
       - name: Summarize backend shard
         if: always()
