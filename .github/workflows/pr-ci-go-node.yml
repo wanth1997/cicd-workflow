@@ -72,6 +72,42 @@ on:
         required: false
         type: string
         default: failure
+      # Where the backend and frontend jobs run (notify-telegram always
+      # runs on ubuntu-latest). Either one label, e.g. ubuntu-latest, or a
+      # JSON array of labels, e.g. ["self-hosted","Linux","X64","wsl"]; a
+      # value that starts with [ is read as JSON. A self-hosted label set
+      # must include a label that no deploy or production runner carries.
+      # The caller picks the value (and its fallback to GitHub-hosted).
+      runner:
+        required: false
+        type: string
+        default: ubuntu-latest
+      # GOFLAGS for the Go jobs, e.g. -p=4 to bound parallel package builds
+      # on a self-hosted machine shared with other jobs. Empty: Go defaults.
+      go_flags:
+        required: false
+        type: string
+        default: ""
+      # Extra docker options for the PostgreSQL service container. Service
+      # containers run outside the runner's own resource limits, so the
+      # default caps them.
+      postgres_service_options:
+        required: false
+        type: string
+        default: --memory=768m --cpus=2
+      # Absolute path of a lock file that every runner installation on one
+      # self-hosted machine shares, e.g. /tmp/<service>-ci-backend.lock.
+      # When set, and only on a self-hosted runner, the backend fast suite
+      # and each backend full shard (unless its matrix entry has
+      # "host_lock": false) run backend_ci_command under an exclusive flock
+      # on it, so suites that use one host-wide resource (for example a
+      # flock on /tmp) run one at a time across jobs and workflow runs. The
+      # wait is bounded (20 min, added to the job's timeout) and fails the
+      # job with an error when it runs out. Empty: no lock.
+      backend_host_lock:
+        required: false
+        type: string
+        default: ""
     secrets:
       telegram_bot_token:
         required: false
@@ -85,10 +121,26 @@ env:
 jobs:
   backend-fast-tests:
     name: backend-fast-tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
+    # 12, plus the 20-minute bound on the backend host lock wait when
+    # backend_host_lock is set.
+    timeout-minutes: ${{ inputs.backend_host_lock != '' && 32 || 12 }}
+    env:
+      GOFLAGS: ${{ inputs.go_flags }}
     steps:
+      # A self-hosted runner's user, and so its $HOME, is shared by every job
+      # and repository on that machine. This job keeps its Go and npm caches
+      # and any global config in a HOME under RUNNER_TEMP, which the runner
+      # empties for each job. GitHub-hosted runners skip it.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
@@ -103,7 +155,41 @@ jobs:
         env:
           BACKEND_TEST_SUITE: ${{ inputs.backend_fast_suite }}
           GO_TEST_JSON: .artifacts/ci/backend-fast-go-test.json
-        run: ${{ inputs.backend_ci_command }}
+          BACKEND_HOST_LOCK: ${{ inputs.backend_host_lock }}
+          BACKEND_HOST_LOCK_WAIT_SECONDS: "1200"
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          # The backend_host_lock input: on a self-hosted runner, hold an
+          # exclusive flock on that file (fd 9, inherited by the command and
+          # released when the last process holding it exits) before the
+          # command starts. GitHub-hosted runners never lock.
+          if [[ -n "${BACKEND_HOST_LOCK:-}" && "${RUNNER_KIND:-}" == self-hosted && "${SHARD_HOST_LOCK:-}" != false ]]; then
+            if [[ "$BACKEND_HOST_LOCK" != /* ]]; then
+              echo "::error title=Backend host lock::backend_host_lock must be an absolute path"
+              exit 1
+            fi
+            if ! command -v flock >/dev/null 2>&1; then
+              echo "::error title=Backend host lock::flock is not installed on this self-hosted runner (util-linux); install it, or run on GitHub-hosted runners"
+              exit 1
+            fi
+            # Created world-readable, so every runner user on the machine can
+            # open it; flock needs only a read descriptor.
+            if [[ ! -e "$BACKEND_HOST_LOCK" ]]; then
+              (umask 022 && : >>"$BACKEND_HOST_LOCK") 2>/dev/null || true
+            fi
+            if ! exec 9<"$BACKEND_HOST_LOCK"; then
+              echo "::error title=Backend host lock::cannot open the lock file $BACKEND_HOST_LOCK"
+              exit 1
+            fi
+            echo "Waiting up to ${BACKEND_HOST_LOCK_WAIT_SECONDS}s for the backend host lock $BACKEND_HOST_LOCK"
+            lock_wait_started=$SECONDS
+            if ! flock -w "$BACKEND_HOST_LOCK_WAIT_SECONDS" 9; then
+              echo "::error title=Backend host lock::waited ${BACKEND_HOST_LOCK_WAIT_SECONDS}s for $BACKEND_HOST_LOCK, which another backend suite on this machine still holds; re-run later or run PR CI on GitHub-hosted runners"
+              exit 1
+            fi
+            echo "Holding the backend host lock after $((SECONDS - lock_wait_started))s"
+          fi
+          ${{ inputs.backend_ci_command }}
 
       - name: Upload backend fast Go test report
         if: always()
@@ -116,10 +202,21 @@ jobs:
 
   backend-migration-tests:
     name: backend-migration-tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 12
+    env:
+      GOFLAGS: ${{ inputs.go_flags }}
     steps:
+      # See backend-fast-tests.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
@@ -148,14 +245,26 @@ jobs:
   backend-full-tests:
     name: backend-full-tests (${{ matrix.shard }})
     if: ${{ inputs.run_backend_full_tests }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
+    # 20, plus the 20-minute bound on the backend host lock wait.
+    timeout-minutes: ${{ inputs.backend_host_lock != '' && 40 || 20 }}
+    env:
+      GOFLAGS: ${{ inputs.go_flags }}
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(inputs.backend_full_shards_json) }}
     steps:
+      # See backend-fast-tests.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
@@ -170,7 +279,39 @@ jobs:
         env:
           BACKEND_TEST_SUITE: ${{ matrix.suite }}
           GO_TEST_JSON: .artifacts/ci/${{ matrix.report }}
-        run: ${{ inputs.backend_ci_command }}
+          BACKEND_HOST_LOCK: ${{ inputs.backend_host_lock }}
+          BACKEND_HOST_LOCK_WAIT_SECONDS: "1200"
+          RUNNER_KIND: ${{ runner.environment }}
+          SHARD_HOST_LOCK: ${{ matrix.host_lock }}
+        run: |
+          # Same as "Run backend fast tests", plus the shard's host_lock.
+          if [[ -n "${BACKEND_HOST_LOCK:-}" && "${RUNNER_KIND:-}" == self-hosted && "${SHARD_HOST_LOCK:-}" != false ]]; then
+            if [[ "$BACKEND_HOST_LOCK" != /* ]]; then
+              echo "::error title=Backend host lock::backend_host_lock must be an absolute path"
+              exit 1
+            fi
+            if ! command -v flock >/dev/null 2>&1; then
+              echo "::error title=Backend host lock::flock is not installed on this self-hosted runner (util-linux); install it, or run on GitHub-hosted runners"
+              exit 1
+            fi
+            # Created world-readable, so every runner user on the machine can
+            # open it; flock needs only a read descriptor.
+            if [[ ! -e "$BACKEND_HOST_LOCK" ]]; then
+              (umask 022 && : >>"$BACKEND_HOST_LOCK") 2>/dev/null || true
+            fi
+            if ! exec 9<"$BACKEND_HOST_LOCK"; then
+              echo "::error title=Backend host lock::cannot open the lock file $BACKEND_HOST_LOCK"
+              exit 1
+            fi
+            echo "Waiting up to ${BACKEND_HOST_LOCK_WAIT_SECONDS}s for the backend host lock $BACKEND_HOST_LOCK"
+            lock_wait_started=$SECONDS
+            if ! flock -w "$BACKEND_HOST_LOCK_WAIT_SECONDS" 9; then
+              echo "::error title=Backend host lock::waited ${BACKEND_HOST_LOCK_WAIT_SECONDS}s for $BACKEND_HOST_LOCK, which another backend suite on this machine still holds; re-run later or run PR CI on GitHub-hosted runners"
+              exit 1
+            fi
+            echo "Holding the backend host lock after $((SECONDS - lock_wait_started))s"
+          fi
+          ${{ inputs.backend_ci_command }}
 
       - name: Summarize backend shard
         if: always()
@@ -242,7 +383,7 @@ jobs:
 
   backend-migration:
     name: backend-migration
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 10
     services:
       postgres:
@@ -251,18 +392,30 @@ jobs:
           POSTGRES_DB: ${{ inputs.postgres_db }}
           POSTGRES_USER: ${{ inputs.postgres_user }}
           POSTGRES_PASSWORD: ${{ inputs.postgres_password }}
+        # Docker picks the host port, so jobs that share one self-hosted
+        # machine never collide on 5432 (see "Point at the PostgreSQL
+        # service").
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U ${{ inputs.postgres_user }} -d ${{ inputs.postgres_db }}"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+          ${{ inputs.postgres_service_options }}
     env:
-      DATABASE_URL: postgres://${{ inputs.postgres_user }}:${{ inputs.postgres_password }}@localhost:5432/${{ inputs.postgres_db }}?sslmode=disable
-      TEST_DATABASE_URL: postgres://${{ inputs.postgres_user }}:${{ inputs.postgres_password }}@localhost:5432/${{ inputs.postgres_db }}?sslmode=disable
+      GOFLAGS: ${{ inputs.go_flags }}
     steps:
+      # See backend-fast-tests.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
@@ -273,15 +426,44 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
+      # DATABASE_URL and TEST_DATABASE_URL point at the host port Docker
+      # mapped to the service's 5432; later steps read them from GITHUB_ENV.
+      - name: Point at the PostgreSQL service
+        env:
+          PG_PORT: ${{ job.services.postgres.ports['5432'] }}
+          PG_DB: ${{ inputs.postgres_db }}
+          PG_USER: ${{ inputs.postgres_user }}
+          PG_PASSWORD: ${{ inputs.postgres_password }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PG_PORT" =~ ^[0-9]+$ ]]; then
+            echo "::error title=PostgreSQL service::no host port is mapped to the service's 5432"
+            exit 1
+          fi
+          creds="${PG_USER}:${PG_PASSWORD}"
+          url="postgres://${creds}@localhost:${PG_PORT}/${PG_DB}?sslmode=disable"
+          echo "DATABASE_URL=${url}" >> "$GITHUB_ENV"
+          echo "TEST_DATABASE_URL=${url}" >> "$GITHUB_ENV"
+          echo "PostgreSQL service on host port ${PG_PORT}"
+
       - name: Run migration and schema check
         run: ${{ inputs.migration_check_command }}
 
   frontend-checks:
     name: frontend-checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
+      # See backend-fast-tests.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:

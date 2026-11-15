@@ -2,7 +2,7 @@
 
 > Status: draft reusable workflow
 >
-> Last updated: 2026-05-25
+> Last updated: 2026-11-15
 
 Reusable PR CI workflow for a service with:
 
@@ -49,6 +49,10 @@ notifications use a caller-provided `telegram_bot_token` secret.
 | `artifact_retention_days` | no | `14` |
 | `telegram_chat_id` | no | empty, disables Telegram |
 | `telegram_notify_on` | no | `failure` |
+| `runner` | no | `ubuntu-latest` (one label, or a JSON label array such as `["self-hosted","Linux","X64","wsl"]`) |
+| `go_flags` | no | empty (`GOFLAGS` of the Go jobs, e.g. `-p=4`) |
+| `postgres_service_options` | no | `--memory=768m --cpus=2` |
+| `backend_host_lock` | no | empty, no lock (absolute path of a host-wide lock file, self-hosted only) |
 
 ## Secrets
 
@@ -62,6 +66,86 @@ When enabled, the final `notify-telegram` job sends one concise status message
 with repo, stage, workflow, status, branch, commit title plus short SHA, job
 results, action guidance, and the GitHub Run URL. `telegram_notify_on` accepts
 `failure`, `always`, or `never`.
+
+## Runners
+
+`runner` sets `runs-on` for `backend-fast-tests`, `backend-migration-tests`,
+`backend-full-tests`, `backend-migration` and `frontend-checks`. A value that
+starts with `[` is read as a JSON array of labels; anything else is one label.
+`notify-telegram` always runs on `ubuntu-latest`, so a failure is still
+reported when a self-hosted machine is down.
+
+The workflow does not pick or check the runner itself. A caller that wants a
+self-hosted runner with a fallback to GitHub-hosted resolves it in its own
+job first (for example from the repository's runner list) and passes the
+result here. A self-hosted label set must include a label that no deploy or
+production runner carries, so a PR job can never land on one.
+
+What changes on a self-hosted runner (`runner.environment == 'self-hosted'`):
+
+- Each job first sets `HOME` to `$RUNNER_TEMP/home`. The runner user and its
+  `$HOME` are shared by every job and repository on the machine; with a
+  per-job `HOME`, the Go module and build caches, the npm cache, `go env -w`
+  and any global git config live in `_temp`, which the runner empties for
+  each job, and nothing from another job's `~/.gitconfig` is read.
+  `actions/setup-go` and `actions/setup-node` resolve their cache paths
+  (`go env GOMODCACHE`/`GOCACHE`, `npm config get cache`) under that `HOME`
+  on both restore and save. The cache version includes those absolute
+  paths, so each runner keeps its own cache entries; after its first run a
+  runner hits its own cache. GitHub-hosted jobs skip this step.
+- `actions/checkout` runs with `persist-credentials: false`, so no token is
+  left in the workspace `.git/config` or in `_temp`. The service commands
+  must not need authenticated git.
+
+- Backend host lock (`backend_host_lock`, empty by default). Some backend
+  suites use a host-wide resource that separate jobs cannot isolate: for
+  example a test that takes a non-blocking `flock` on the topmost writable
+  directory above its `t.TempDir()`, which on Linux is `/tmp` itself, so
+  two such suites on one machine fail each other whatever their checkout,
+  `HOME` or `TMPDIR`. When `backend_host_lock` names a file, the backend
+  fast suite and each backend full shard run `backend_ci_command` under an
+  exclusive `flock` on it, so those suites run one at a time on the machine,
+  across jobs, runner installations and workflow runs. A full shard opts out
+  with `"host_lock": false` in its `backend_full_shards_json` entry; the
+  migration jobs never lock.
+  - Use one fixed path that every runner installation on the machine sees,
+    under the same `/tmp` the colliding resource lives in, e.g.
+    `/tmp/<service>-ci-backend.lock`. It is created `0644` and opened
+    read-only, so runner installations under different users share it.
+  - The wait is bounded at 20 minutes, and that bound is added to the job's
+    `timeout-minutes` (fast 12 -> 32, full 20 -> 40) only when the input is
+    set, so the wait never eats the suite's own budget. A wait that runs out
+    fails the job with a `Backend host lock` error.
+  - `flock` (util-linux) must be installed on the self-hosted runner; if it
+    is missing the job fails with an error instead of running unlocked.
+  - GitHub-hosted runners never lock, even when the input is set.
+  - Cost: locked suites run one at a time per machine. A job waiting for
+    the lock holds its runner, so other jobs may queue behind it.
+
+On every runner:
+
+- The PostgreSQL service publishes 5432 on a host port Docker picks (jobs on
+  one machine never collide), and a step exports `DATABASE_URL` and
+  `TEST_DATABASE_URL` with that port to `GITHUB_ENV`. The migration command
+  must read them rather than assume `localhost:5432`.
+- `postgres_service_options` is appended to the service container's docker
+  options. Service containers run outside the runner's own resource limits
+  (for example a systemd slice), so the default caps them at
+  `--memory=768m --cpus=2`.
+- `go_flags` becomes `GOFLAGS` of the four Go jobs. On a machine with many
+  CPUs shared with other runners, `-p=4` bounds how many packages build and
+  test at once; flags given on a command line still win.
+
+## Version Notes
+
+- `v0.9.0`: adds `runner`, `go_flags`, `postgres_service_options` and
+  `backend_host_lock` (host-wide flock for the backend suites on self-hosted
+  runners, opt-out per full shard with `"host_lock": false`); the
+  per-job `HOME` on self-hosted runners; `persist-credentials: false` on
+  checkout; and the PostgreSQL service on a Docker-picked host port, with
+  `DATABASE_URL`/`TEST_DATABASE_URL` exported from it (was a fixed
+  `5432:5432` with the URLs in the job env). With the defaults, the jobs run
+  on `ubuntu-latest` as before.
 
 ## Output Artifacts
 
