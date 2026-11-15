@@ -72,6 +72,29 @@ on:
         required: false
         type: string
         default: failure
+      # Where the backend and frontend jobs run (notify-telegram always
+      # runs on ubuntu-latest). Either one label, e.g. ubuntu-latest, or a
+      # JSON array of labels, e.g. ["self-hosted","Linux","X64","wsl"]; a
+      # value that starts with [ is read as JSON. A self-hosted label set
+      # must include a label that no deploy or production runner carries.
+      # The caller picks the value (and its fallback to GitHub-hosted).
+      runner:
+        required: false
+        type: string
+        default: ubuntu-latest
+      # GOFLAGS for the Go jobs, e.g. -p=4 to bound parallel package builds
+      # on a self-hosted machine shared with other jobs. Empty: Go defaults.
+      go_flags:
+        required: false
+        type: string
+        default: ""
+      # Extra docker options for the PostgreSQL service container. Service
+      # containers run outside the runner's own resource limits, so the
+      # default caps them.
+      postgres_service_options:
+        required: false
+        type: string
+        default: --memory=768m --cpus=2
     secrets:
       telegram_bot_token:
         required: false
@@ -85,10 +108,24 @@ env:
 jobs:
   backend-fast-tests:
     name: backend-fast-tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 12
+    env:
+      GOFLAGS: ${{ inputs.go_flags }}
     steps:
+      # A self-hosted runner's user, and so its $HOME, is shared by every job
+      # and repository on that machine. This job keeps its Go and npm caches
+      # and any global config in a HOME under RUNNER_TEMP, which the runner
+      # empties for each job. GitHub-hosted runners skip it.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
@@ -116,10 +153,21 @@ jobs:
 
   backend-migration-tests:
     name: backend-migration-tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 12
+    env:
+      GOFLAGS: ${{ inputs.go_flags }}
     steps:
+      # See backend-fast-tests.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
@@ -148,14 +196,25 @@ jobs:
   backend-full-tests:
     name: backend-full-tests (${{ matrix.shard }})
     if: ${{ inputs.run_backend_full_tests }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 20
+    env:
+      GOFLAGS: ${{ inputs.go_flags }}
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(inputs.backend_full_shards_json) }}
     steps:
+      # See backend-fast-tests.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
@@ -242,7 +301,7 @@ jobs:
 
   backend-migration:
     name: backend-migration
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 10
     services:
       postgres:
@@ -251,18 +310,30 @@ jobs:
           POSTGRES_DB: ${{ inputs.postgres_db }}
           POSTGRES_USER: ${{ inputs.postgres_user }}
           POSTGRES_PASSWORD: ${{ inputs.postgres_password }}
+        # Docker picks the host port, so jobs that share one self-hosted
+        # machine never collide on 5432 (see "Point at the PostgreSQL
+        # service").
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U ${{ inputs.postgres_user }} -d ${{ inputs.postgres_db }}"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+          ${{ inputs.postgres_service_options }}
     env:
-      DATABASE_URL: postgres://${{ inputs.postgres_user }}:${{ inputs.postgres_password }}@localhost:5432/${{ inputs.postgres_db }}?sslmode=disable
-      TEST_DATABASE_URL: postgres://${{ inputs.postgres_user }}:${{ inputs.postgres_password }}@localhost:5432/${{ inputs.postgres_db }}?sslmode=disable
+      GOFLAGS: ${{ inputs.go_flags }}
     steps:
+      # See backend-fast-tests.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
@@ -273,15 +344,44 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
+      # DATABASE_URL and TEST_DATABASE_URL point at the host port Docker
+      # mapped to the service's 5432; later steps read them from GITHUB_ENV.
+      - name: Point at the PostgreSQL service
+        env:
+          PG_PORT: ${{ job.services.postgres.ports['5432'] }}
+          PG_DB: ${{ inputs.postgres_db }}
+          PG_USER: ${{ inputs.postgres_user }}
+          PG_PASSWORD: ${{ inputs.postgres_password }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PG_PORT" =~ ^[0-9]+$ ]]; then
+            echo "::error title=PostgreSQL service::no host port is mapped to the service's 5432"
+            exit 1
+          fi
+          creds="${PG_USER}:${PG_PASSWORD}"
+          url="postgres://${creds}@localhost:${PG_PORT}/${PG_DB}?sslmode=disable"
+          echo "DATABASE_URL=${url}" >> "$GITHUB_ENV"
+          echo "TEST_DATABASE_URL=${url}" >> "$GITHUB_ENV"
+          echo "PostgreSQL service on host port ${PG_PORT}"
+
       - name: Run migration and schema check
         run: ${{ inputs.migration_check_command }}
 
   frontend-checks:
     name: frontend-checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
+      # See backend-fast-tests.
+      - name: Use a per-job HOME on self-hosted runners
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
