@@ -1,0 +1,26 @@
+name: pool-evidence
+description: >-
+  Print one pool-evidence line for the job (memory peak, limit, failcnt, OOM
+  kills from the job's memory cgroup). Put it last in a pool job with
+  if: always(). It never fails the job. See README.md.
+
+outputs:
+  peak_mb:
+    description: "Highest memory use in MiB, or n/a."
+    value: ${{ steps.evidence.outputs.peak_mb }}
+  limit_mb:
+    description: "Memory limit in MiB, max for none, or n/a."
+    value: ${{ steps.evidence.outputs.limit_mb }}
+  failcnt:
+    description: "Times memory use hit the limit, or n/a."
+    value: ${{ steps.evidence.outputs.failcnt }}
+  oom_kill:
+    description: "Processes OOM-killed in the cgroup, or n/a."
+    value: ${{ steps.evidence.outputs.oom_kill }}
+
+runs:
+  using: composite
+  steps:
+    - id: evidence
+      shell: bash
+      run: python3 -I "$GITHUB_ACTION_PATH/evidence.py" || true
