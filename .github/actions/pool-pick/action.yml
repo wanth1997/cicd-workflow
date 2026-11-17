@@ -41,7 +41,7 @@ inputs:
     required: false
     default: ""
   runner-group-id:
-    description: "Id of this repository's runner group in its organization; its runners get the production label check too."
+    description: "Id of this repository's runner group in its organization (a positive integer); its runners get the production label check too. Required for a pool pick: missing, empty or invalid means GitHub-hosted."
     required: false
     default: ""
   pr-head-repo:

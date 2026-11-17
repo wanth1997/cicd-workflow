@@ -13,10 +13,11 @@ Rules, in order:
 3. A status that cannot be read sends the run to GitHub-hosted, fixed modes
    included: no token, a failed request, JSON it cannot read, a `v` it does
    not know.
-4. A runner of this repository (or of its runner group, when
-   runner-group-id is given) with a pool-* label and a label containing
-   "prod" sends the run to GitHub-hosted, and so does a runner list it
-   cannot read in full.
+4. A runner of this repository or of its runner group (runner-group-id)
+   with a pool-* label and a label containing "prod" sends the run to
+   GitHub-hosted, and so does a runner list it cannot read in full. Without
+   a valid runner-group-id (a positive integer) the group cannot be checked,
+   so the run is GitHub-hosted, before any lookup.
 5. Candidates: a fresh status (updated at most 120 seconds ago by the
    GitHub clock), state accepting, this repository in `repos`, a slot for
    every class the workflow uses.
@@ -116,8 +117,6 @@ def read_inputs():
     if max_backlog and not re.fullmatch(r"[0-9]{1,6}", max_backlog):
         raise InputError("max-backlog must be empty or a non-negative integer")
     group = env("POOL_RUNNER_GROUP_ID")
-    if group and not re.fullmatch(r"[1-9][0-9]{0,12}", group):
-        raise InputError("runner-group-id must be empty or a positive integer")
     status_repo = env("POOL_STATUS_REPO")
     if raw_mode != "github" and not REPO_RE.match(status_repo):
         raise InputError("status-repo must be owner/name")
@@ -322,11 +321,10 @@ def read_runners(client, path, what):
 
 
 def production_reason(client, cfg):
-    lists = [(f"/repos/{cfg['repository']}/actions/runners", "the repository runner list")]
-    if cfg["group"]:
-        org = cfg["repository"].split("/", 1)[0]
-        lists.append((f"/orgs/{org}/actions/runner-groups/{cfg['group']}/runners",
-                      f"the runner group {cfg['group']} list"))
+    org = cfg["repository"].split("/", 1)[0]
+    lists = [(f"/repos/{cfg['repository']}/actions/runners", "the repository runner list"),
+             (f"/orgs/{org}/actions/runner-groups/{cfg['group']}/runners",
+              f"the runner group {cfg['group']} list")]
     for path, what in lists:
         hits = sum(1 for labels in read_runners(client, path, what)
                    if any(l.startswith("pool-") for l in labels) and any("prod" in l for l in labels))
@@ -416,6 +414,12 @@ def pick(cfg):
         return "github", why, True, []
     if cfg["mode"] == "github":
         return "github", "mode github, no lookup", False, []
+    group = cfg["group"]
+    if not group:
+        return "github", "runner-group-id is empty: the runner group cannot be checked", True, []
+    if not re.fullmatch(r"[1-9][0-9]{0,12}", group):
+        return "github", (f"runner-group-id ({one_line(group, 40)}) is not a positive integer: "
+                          "the runner group cannot be checked"), True, []
     token = os.environ.get("POOL_PICK_TOKEN", "")
     if not token.strip():
         return "github", "status unreadable: the token is empty (the secret is not set or not shared with this run)", True, []

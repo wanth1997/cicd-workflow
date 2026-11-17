@@ -97,7 +97,10 @@ Rules, in order:
    runner group `runner-group-id` of the repository's organization, with a
    `pool-*` label and a label containing `prod` (any case) sends the run to
    GitHub-hosted. So does a runner list it cannot read in full (up to 5
-   pages of 100).
+   pages of 100). Both lists are always checked: when `runner-group-id` is
+   missing, empty or not a positive integer, the run is GitHub-hosted (the
+   reason says so) and nothing is looked up. Untrusted runs and mode
+   `github` do not need it.
 5. Candidates: the variable's `updated_at` is at most 120 seconds older than
    the API response's `Date` (GitHub's clock, not the host's), `state` is
    `accepting`, `repos` lists this repository (any case), and every class in
@@ -130,7 +133,7 @@ it, "Re-run all jobs" picks again.
 | `github-heavy`, `github-light` | `ubuntu-latest` | GitHub-hosted `runs-on`: a label or a JSON array of labels |
 | `prefer` | `srv`, or the first of `hosts` without `srv` | wins ties; `pool` waits on it when no host is accepting |
 | `max-backlog` | empty: always queue | GitHub-hosted when more than N jobs would wait |
-| `runner-group-id` | empty: not read | the repository's runner group id in its organization |
+| `runner-group-id` | none, required for a pool pick | the repository's runner group id in its organization (a positive integer); missing or invalid means GitHub-hosted |
 | `pr-head-repo` | `github.event.pull_request.head.repo.full_name` | head repository of a pull request |
 | `repository-visibility` | `github.event.repository.visibility` | `private` and `internal` are trusted |
 
@@ -147,7 +150,7 @@ and into the job summary; reports read it from the annotation. One
 
 The token needs read access to the status repository's Actions variables,
 Administration read on the repository (its runner list), and the
-organization's Self-hosted runners read when `runner-group-id` is set. It
+organization's Self-hosted runners read (the runner group's runners). It
 reaches `curl` only on stdin (`--header @-`); it is never in the arguments,
 the log or the outputs, and the responses and their headers are not printed.
 

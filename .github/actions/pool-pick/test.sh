@@ -105,8 +105,12 @@ reset() {
   rm -f "$tmp/unknown.body"
 }
 
-# pick [VAR=VALUE ...]: runs pick.py; sets out, code, got, heavy, light, reason, calls.
+# pick [--no-group] [VAR=VALUE ...]: runs pick.py with runner-group-id 42
+# (--no-group: without the variable); sets out, code, got, heavy, light,
+# reason, calls.
 pick() {
+  local group=(POOL_RUNNER_GROUP_ID=42)
+  if [[ "${1:-}" == --no-group ]]; then group=(); shift; fi
   code=0
   : > "$tmp/out"
   : > "$tmp/summary"
@@ -115,7 +119,7 @@ pick() {
     RUNNER_TEMP="$tmp/runner" GITHUB_REPOSITORY=example-org/example-app GITHUB_EVENT_NAME=push \
     GITHUB_ACTOR=someone GITHUB_TRIGGERING_ACTOR=someone GITHUB_OUTPUT="$tmp/out" \
     GITHUB_STEP_SUMMARY="$tmp/summary" POOL_PICK_TOKEN=sekrit-token-value \
-    POOL_STATUS_REPO=example-org/pool-status POOL_REPO_VISIBILITY=private "$@" \
+    POOL_STATUS_REPO=example-org/pool-status POOL_REPO_VISIBILITY=private ${group[@]+"${group[@]}"} "$@" \
     python3 -I "$here/pick.py" 2>&1)" || code=$?
   got="$(sed -n 's/^runner=//p' "$tmp/out")"
   heavy="$(sed -n 's/^runs_on_heavy=//p' "$tmp/out")"
@@ -164,8 +168,9 @@ grep -A1 -xF -- '--header' "$tmp/args" | grep -qxF -- '@-' || fail "curl does no
 diff <(cat "$tmp/urls") <(printf '%s\n' \
   https://api.github.com/repos/example-org/pool-status/actions/variables/POOL_STATUS_PC \
   https://api.github.com/repos/example-org/pool-status/actions/variables/POOL_STATUS_SRV \
-  'https://api.github.com/repos/example-org/example-app/actions/runners?per_page=100&page=1') ||
-  fail "wrong requests (no runner-group-id: no group lookup)"
+  'https://api.github.com/repos/example-org/example-app/actions/runners?per_page=100&page=1' \
+  'https://api.github.com/orgs/example-org/actions/runner-groups/42/runners?per_page=100&page=1') ||
+  fail "wrong requests"
 pick GITHUB_API_URL=https://ghe.example.invalid/api/v3
 want "GITHUB_API_URL is used" srv
 grep -q '^https://ghe.example.invalid/api/v3/repos/' "$tmp/urls" || fail "GITHUB_API_URL ignored: $(cat "$tmp/urls")"
@@ -235,7 +240,7 @@ for bad in macos-latest ubuntu-latest wsl mac srv2 PC; do
 done
 # Other inputs are checked before anything is read.
 for bad in POOL_HOSTS=pc,mac POOL_HOSTS=pc,pc POOL_CLASSES=heavy,gpu POOL_PREFER=srv2 POOL_MAX_BACKLOG=-1 \
-  POOL_MAX_BACKLOG=two POOL_RUNNER_GROUP_ID=0 POOL_RUNNER_GROUP_ID=12a POOL_STATUS_REPO=pool-status \
+  POOL_MAX_BACKLOG=two POOL_STATUS_REPO=pool-status \
   'POOL_GITHUB_HEAVY=[]' 'POOL_GITHUB_LIGHT=[1]' 'POOL_GITHUB_HEAVY=[not json'; do
   pick "$bad"
   cases=$((cases + 1))
@@ -386,7 +391,8 @@ says "the runner list returns 403" warning "the repository runner list unreadabl
 http repo-runners fail
 pick POOL_MODE=pc
 want "the runner list request fails, pinned pc" github
-# The runner group of the repository (org): read only with runner-group-id.
+# The runner group of the repository (org): always read; without a valid
+# runner-group-id the run is GitHub-hosted (fail closed), with no lookup.
 reset
 pick POOL_RUNNER_GROUP_ID=42
 want "group runners read and clean" srv
@@ -396,8 +402,35 @@ runners group-runners 2 "self-hosted pool-srv-heavy" "self-hosted pool-srv-light
 pick POOL_RUNNER_GROUP_ID=42
 want "a production pool runner in the group" github
 says "group prod" warning "1 runner(s) in the runner group 42 list carry a pool label and a prod label"
-pick
-want "the group is not read without runner-group-id" srv
+pick --no-group
+want "runner-group-id left out" github
+says "runner-group-id left out" warning "pool-pick: auto picks github: runner-group-id is empty: the runner group cannot be checked"
+[[ "$reason" == "runner-group-id is empty: the runner group cannot be checked" ]] || fail "left out: reason output '$reason'"
+grep -qF "auto picks github: runner-group-id is empty" "$tmp/summary" || fail "left out: not in the summary"
+no_lookup "runner-group-id left out"
+runners group-runners 1 "self-hosted pool-srv-heavy"
+for mode in auto pool srv pc; do
+  pick POOL_RUNNER_GROUP_ID= POOL_MODE=$mode
+  want "runner-group-id empty, mode $mode" github
+  says "runner-group-id empty, mode $mode" warning "picks github: runner-group-id is empty"
+  no_lookup "runner-group-id empty, mode $mode"
+done
+for bad in 12a 0 -1 4.2 ' 42x' "$(printf '42\n::error::x')"; do
+  pick POOL_RUNNER_GROUP_ID="$bad"
+  want "runner-group-id '$bad'" github
+  says "runner-group-id '$bad'" warning "is not a positive integer: the runner group cannot be checked"
+  grep -q '^::error' <<<"$out" && fail "runner-group-id '$bad' injected a workflow command"
+  no_lookup "runner-group-id '$bad'"
+done
+grep -qF "$reason" "$tmp/summary" || fail "bad id: the reason is not in the summary"
+pick --no-group GITHUB_EVENT_NAME=pull_request POOL_PR_HEAD_REPO=someone/example-app
+want "untrusted without runner-group-id" github
+says "untrusted without runner-group-id" warning "untrusted run: the pull request head repo"
+no_lookup "untrusted without runner-group-id"
+pick --no-group POOL_MODE=github
+want "mode github without runner-group-id" github
+says "mode github without runner-group-id" notice "mode github, no lookup"
+no_lookup "mode github without runner-group-id"
 reset
 http group-runners 404
 pick POOL_RUNNER_GROUP_ID=42 POOL_MODE=srv
