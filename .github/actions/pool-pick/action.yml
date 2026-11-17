@@ -1,0 +1,88 @@
+name: pool-pick
+description: >-
+  Pick where a run's jobs go: a self-hosted pool host (pool-<host>-<class>) or
+  GitHub-hosted. Run it in a job on a GitHub-hosted runner. See README.md.
+
+inputs:
+  mode:
+    description: "auto (also when empty), pool, github, or a host id from hosts. Usually vars.POOL_RUNNER."
+    required: false
+    default: ""
+  token:
+    description: "Read-only token: status variables, the repository runner list, the runner group's runners."
+    required: false
+    default: ""
+  status-repo:
+    description: "owner/name of the repository whose variables POOL_STATUS_<HOST> hold the host status."
+    required: false
+    default: ""
+  hosts:
+    description: "Comma-separated host ids to read, in tie-break order after prefer."
+    required: false
+    default: "pc,srv"
+  classes:
+    description: "Classes the workflow uses: heavy, light or heavy,light."
+    required: false
+    default: "heavy,light"
+  github-heavy:
+    description: "runs-on for heavy jobs on GitHub-hosted: a label or a JSON array of labels."
+    required: false
+    default: "ubuntu-latest"
+  github-light:
+    description: "runs-on for light jobs on GitHub-hosted: a label or a JSON array of labels."
+    required: false
+    default: "ubuntu-latest"
+  prefer:
+    description: "Host that wins a tie, and that mode pool waits on when no host is accepting. Empty: srv, or the first of hosts without srv."
+    required: false
+    default: ""
+  max-backlog:
+    description: "Empty: a full pool queues. N: GitHub-hosted when more than N jobs would wait, this run included."
+    required: false
+    default: ""
+  runner-group-id:
+    description: "Id of this repository's runner group in its organization; its runners get the production label check too."
+    required: false
+    default: ""
+  pr-head-repo:
+    description: "Head repository of the pull request (owner/name)."
+    required: false
+    default: ${{ github.event.pull_request.head.repo.full_name }}
+  repository-visibility:
+    description: "private, internal or public. Anything else counts as public."
+    required: false
+    default: ${{ github.event.repository.visibility }}
+
+outputs:
+  runner:
+    description: "The pick: a host id (pc, srv, ...) or github."
+    value: ${{ steps.pick.outputs.runner }}
+  runs_on_heavy:
+    description: "JSON for runs-on of heavy jobs (use with fromJSON)."
+    value: ${{ steps.pick.outputs.runs_on_heavy }}
+  runs_on_light:
+    description: "JSON for runs-on of light jobs (use with fromJSON)."
+    value: ${{ steps.pick.outputs.runs_on_light }}
+  reason:
+    description: "One line: why this pick."
+    value: ${{ steps.pick.outputs.reason }}
+
+runs:
+  using: composite
+  steps:
+    - id: pick
+      shell: bash
+      env:
+        POOL_MODE: ${{ inputs.mode }}
+        POOL_PICK_TOKEN: ${{ inputs.token }}
+        POOL_STATUS_REPO: ${{ inputs.status-repo }}
+        POOL_HOSTS: ${{ inputs.hosts }}
+        POOL_CLASSES: ${{ inputs.classes }}
+        POOL_GITHUB_HEAVY: ${{ inputs.github-heavy }}
+        POOL_GITHUB_LIGHT: ${{ inputs.github-light }}
+        POOL_PREFER: ${{ inputs.prefer }}
+        POOL_MAX_BACKLOG: ${{ inputs.max-backlog }}
+        POOL_RUNNER_GROUP_ID: ${{ inputs.runner-group-id }}
+        POOL_PR_HEAD_REPO: ${{ inputs.pr-head-repo }}
+        POOL_REPO_VISIBILITY: ${{ inputs.repository-visibility }}
+      run: python3 -I "$GITHUB_ACTION_PATH/pick.py"
