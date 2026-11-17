@@ -27,18 +27,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Parse workflow YAML
+      - name: Parse workflow and action YAML
         run: |
           set -euo pipefail
           ruby -e '
             require "yaml"
             files = Dir[".github/workflows/*.yml"].sort
             abort("No workflow YAML files found") if files.empty?
+            files += Dir[".github/actions/*/action.yml"].sort
             files.each do |file|
               YAML.load_file(file)
               puts "yaml ok: #{file}"
             end
           '
+
+      - name: Test pool actions
+        run: |
+          set -euo pipefail
+          shellcheck .github/actions/*/test.sh
+          bash .github/actions/pool-pick/test.sh
+          bash .github/actions/pool-evidence/test.sh
 
       - name: Check public safety boundary
         run: |
