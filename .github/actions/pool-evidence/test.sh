@@ -65,11 +65,11 @@ want "v2 nested cgroup" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v
 # A membership that cannot be mapped is n/a, never the root's figures (9000 here).
 put memory.max $((16384 * mib))
 put memory.events $'max 5\noom_kill 4'
-for member in /../../etc /.. /ci-pool.slice/../job-1.scope /ci-pool.slice/job-2.scope /ci-pool.slice/ \
+for member in "" /../../etc /.. /ci-pool.slice/../job-1.scope /ci-pool.slice/job-2.scope /ci-pool.slice/ \
   ci-pool.slice/job-1.scope /./ci-pool.slice/job-1.scope; do
   printf '0::%s\n' "$member" > "$tmp/proc"
   evidence
-  want "v2 membership $member" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
+  want "v2 membership ${member:-(empty)}" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
 done
 printf '1:name=systemd:/x\n' > "$tmp/proc"
 evidence
@@ -90,10 +90,10 @@ put memory/memory.max_usage_in_bytes $((12000 * mib))
 put memory/memory.limit_in_bytes $((16384 * mib))
 put memory/memory.failcnt 9
 put memory/memory.oom_control $'oom_kill_disable 0\nunder_oom 0\noom_kill 3'
-for member in /../../etc /docker/.. /docker/missing /docker/abc/ docker/abc; do
+for member in "" /../../etc /docker/.. /docker/missing /docker/abc/ docker/abc; do
   printf '12:memory:%s\n4:cpu,cpuacct:/docker/abc\n' "$member" > "$tmp/proc"
   evidence
-  want "v1 membership $member" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
+  want "v1 membership ${member:-(empty)}" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
 done
 printf '4:cpu,cpuacct:/docker/abc\n' > "$tmp/proc"
 evidence

@@ -65,10 +65,13 @@ def own_paths(root, proc):
             v1 = parts[2]
     def inside(base, rel):
         # The mount root is ours only when the membership is exactly "/" (a cgroup
-        # namespace: the container). Anything with "..", ".", an empty part or a
-        # directory we cannot see is not mapped: its figures are n/a, never the root's.
+        # namespace: the container). An empty path, anything with "..", "." or an
+        # empty part, or a directory we cannot see is not mapped: its figures are
+        # n/a, never the root's.
         if rel == "/":
             return base
+        if not rel:
+            return None
         parts = rel.split("/")
         if parts[0] != "" or any(p in ("", ".", "..") for p in parts[1:]):
             return None
