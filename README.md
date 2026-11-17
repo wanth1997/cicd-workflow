@@ -178,7 +178,11 @@ pool-evidence: runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=
 | `failcnt` | `memory.events` `max` | `memory.failcnt` |
 | `oom_kill` | `memory.events` `oom_kill` | `memory.oom_control` `oom_kill` |
 
-A value it cannot read is `n/a`.
+A value it cannot read is `n/a`. Every value is `n/a` when the step's
+membership in `/proc/self/cgroup` cannot be mapped under the cgroup mount:
+only a membership of exactly `/` (a cgroup namespace, as in a container) reads
+the mount root; a path with `..`, or one that is not visible, never falls back
+to the root's figures.
 
 ### Tests and fixtures
 

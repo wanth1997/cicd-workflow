@@ -62,9 +62,18 @@ put ci-pool.slice/job-1.scope/memory.max $((2048 * mib))
 put ci-pool.slice/job-1.scope/memory.events $'max 0\noom_kill 0'
 evidence
 want "v2 nested cgroup" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=1500 limit_mb=2048 failcnt=0 oom_kill=0"
-printf '0::/../../etc\n' > "$tmp/proc"
+# A membership that cannot be mapped is n/a, never the root's figures (9000 here).
+put memory.max $((16384 * mib))
+put memory.events $'max 5\noom_kill 4'
+for member in /../../etc /.. /ci-pool.slice/../job-1.scope /ci-pool.slice/job-2.scope /ci-pool.slice/ \
+  ci-pool.slice/job-1.scope /./ci-pool.slice/job-1.scope; do
+  printf '0::%s\n' "$member" > "$tmp/proc"
+  evidence
+  want "v2 membership $member" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
+done
+printf '1:name=systemd:/x\n' > "$tmp/proc"
 evidence
-want "a path outside the root reads the root" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=9000 limit_mb=n/a failcnt=n/a oom_kill=n/a"
+want "no v2 membership line" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=n/a peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
 
 # cgroup v1 (memory controller on its own hierarchy), hybrid hosts included.
 fresh $'12:memory:/docker/abc\n4:cpu,cpuacct:/docker/abc\n0::/init.scope'
@@ -76,6 +85,23 @@ put cgroup.controllers "pids"
 evidence
 want "v1" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=3000 limit_mb=4096 failcnt=7 oom_kill=1"
 annotated "v1" warning
+# v1: the hierarchy root has figures too; an unmapped membership must not read them.
+put memory/memory.max_usage_in_bytes $((12000 * mib))
+put memory/memory.limit_in_bytes $((16384 * mib))
+put memory/memory.failcnt 9
+put memory/memory.oom_control $'oom_kill_disable 0\nunder_oom 0\noom_kill 3'
+for member in /../../etc /docker/.. /docker/missing /docker/abc/ docker/abc; do
+  printf '12:memory:%s\n4:cpu,cpuacct:/docker/abc\n' "$member" > "$tmp/proc"
+  evidence
+  want "v1 membership $member" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
+done
+printf '4:cpu,cpuacct:/docker/abc\n' > "$tmp/proc"
+evidence
+want "no v1 membership line" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=n/a peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
+printf '12:memory:/\n' > "$tmp/proc"
+evidence
+want "v1 membership exactly /" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=12000 limit_mb=16384 failcnt=9 oom_kill=3"
+printf '12:memory:/docker/abc\n4:cpu,cpuacct:/docker/abc\n0::/init.scope\n' > "$tmp/proc"
 put memory/docker/abc/memory.limit_in_bytes 9223372036854771712
 put memory/docker/abc/memory.oom_control $'oom_kill_disable 0\nunder_oom 0'
 evidence

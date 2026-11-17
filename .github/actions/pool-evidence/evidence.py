@@ -11,7 +11,9 @@ failcnt   times use hit the limit (v2 memory.events `max`, v1 memory.failcnt);
 oom_kill  processes the kernel OOM-killed in the cgroup (memory.events
           `oom_kill`, v1 memory.oom_control `oom_kill`).
 
-A value it cannot read is `n/a`. The line goes to the log, to a notice
+A value it cannot read is `n/a`, and so is every value when the membership
+path in /proc/self/cgroup cannot be mapped under the mount (only `/` reads
+the mount root). The line goes to the log, to a notice
 (a warning when oom_kill is above 0) and to the job summary. It never fails
 the job: every path exits 0. POOL_EVIDENCE_CGROUP_ROOT (/sys/fs/cgroup) and
 POOL_EVIDENCE_PROC_CGROUP (/proc/self/cgroup) are for the tests.
@@ -49,7 +51,8 @@ def mb(value):
 
 
 def own_paths(root, proc):
-    """-> (version, directory) of this process's memory cgroup, or (None, None)."""
+    """-> (version, directory) of this process's memory cgroup; directory None when its
+    membership path cannot be mapped under the mount; (None, None) without a memory cgroup."""
     text = read(proc) or ""
     v1 = v2 = None
     for line in text.splitlines():
@@ -61,9 +64,16 @@ def own_paths(root, proc):
         elif "memory" in parts[1].split(","):
             v1 = parts[2]
     def inside(base, rel):
-        path = os.path.normpath(os.path.join(base, rel.lstrip("/")))
-        # A cgroup namespace shows "/" (the container); a path we cannot see falls back to the root.
-        return path if (path == base or path.startswith(base + os.sep)) and os.path.isdir(path) else base
+        # The mount root is ours only when the membership is exactly "/" (a cgroup
+        # namespace: the container). Anything with "..", ".", an empty part or a
+        # directory we cannot see is not mapped: its figures are n/a, never the root's.
+        if rel == "/":
+            return base
+        parts = rel.split("/")
+        if parts[0] != "" or any(p in ("", ".", "..") for p in parts[1:]):
+            return None
+        path = os.path.join(base, *parts[1:])
+        return path if os.path.isdir(path) else None
     if v1 is not None and os.path.isdir(os.path.join(root, "memory")):
         return "v1", inside(os.path.join(root, "memory"), v1)
     if v2 is not None and os.path.exists(os.path.join(root, "cgroup.controllers")):
@@ -74,7 +84,9 @@ def own_paths(root, proc):
 def evidence(root, proc):
     version, path = own_paths(root, proc)
     figures = {"peak": None, "limit": None, "failcnt": None, "oom_kill": None}
-    if version == "v2":
+    if path is None:
+        pass
+    elif version == "v2":
         figures["peak"] = number(read(os.path.join(path, "memory.peak")))
         limit = read(os.path.join(path, "memory.max"))
         figures["limit"] = "max" if limit == "max" else number(limit)
