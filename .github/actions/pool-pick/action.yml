@@ -33,7 +33,11 @@ inputs:
     required: false
     default: "ubuntu-latest"
   prefer:
-    description: "Host that wins a tie, and that mode pool waits on when no host is accepting. Empty: srv, or the first of hosts without srv."
+    description: "Host that wins a tie, that fill prefer fills first, and that mode pool waits on when no host is accepting. Empty: srv, or the first of hosts without srv."
+    required: false
+    default: ""
+  fill:
+    description: "Fill order for auto and pool. spread (also when empty): the host with the most free main-class slots, a tie to prefer. prefer: prefer takes the run while it has a free main-class slot, then the most free slots; a full pool queues on the smallest backlog either way. Anything else fails the step."
     required: false
     default: ""
   max-backlog:
@@ -81,6 +85,7 @@ runs:
         POOL_GITHUB_HEAVY: ${{ inputs.github-heavy }}
         POOL_GITHUB_LIGHT: ${{ inputs.github-light }}
         POOL_PREFER: ${{ inputs.prefer }}
+        POOL_FILL: ${{ inputs.fill }}
         POOL_MAX_BACKLOG: ${{ inputs.max-backlog }}
         POOL_RUNNER_GROUP_ID: ${{ inputs.runner-group-id }}
         POOL_PR_HEAD_REPO: ${{ inputs.pr-head-repo }}

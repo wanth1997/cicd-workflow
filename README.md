@@ -107,8 +107,12 @@ Rules, in order:
    `classes` has at least one slot.
 6. `auto`: the candidate with the most free slots (`slots − busy − queued`)
    of the main class (`heavy` when `classes` has it, else `light`); a tie
-   goes to `prefer`, then to the order of `hosts`. When every candidate is
-   full the run queues on the one with the fewest waiting jobs; with
+   goes to `prefer`, then to the order of `hosts`. With `fill: prefer`,
+   `prefer` takes the run whenever it is a candidate with a free slot of the
+   main class (the reason ends in `(fill prefer)`); only when it is full, or
+   not a candidate, does the run go to the candidate with the most free
+   slots. When every candidate is full the run queues on the one with the
+   fewest waiting jobs (a tie goes to `prefer`), whatever `fill` is; with
    `max-backlog: N` it goes to GitHub-hosted instead once more than N jobs,
    this run included, would wait there. No candidate: GitHub-hosted, and the
    warning names each host's reason (offline and for how long, paused, held,
@@ -131,7 +135,8 @@ it, "Re-run all jobs" picks again.
 | `hosts` | `pc,srv` | host ids to read, `POOL_STATUS_<HOST>` each |
 | `classes` | `heavy,light` | classes the workflow uses |
 | `github-heavy`, `github-light` | `ubuntu-latest` | GitHub-hosted `runs-on`: a label or a JSON array of labels |
-| `prefer` | `srv`, or the first of `hosts` without `srv` | wins ties; `pool` waits on it when no host is accepting |
+| `prefer` | `srv`, or the first of `hosts` without `srv` | wins ties; `fill: prefer` fills it first; `pool` waits on it when no host is accepting |
+| `fill` | `spread` when empty | `spread`: most free slots first; `prefer`: `prefer` first while it has a free slot (rule 6); anything else fails the step |
 | `max-backlog` | empty: always queue | GitHub-hosted when more than N jobs would wait |
 | `runner-group-id` | none, required for a pool pick | the repository's runner group id in its organization (a positive integer); missing or invalid means GitHub-hosted |
 | `pr-head-repo` | `github.event.pull_request.head.repo.full_name` | head repository of a pull request |
