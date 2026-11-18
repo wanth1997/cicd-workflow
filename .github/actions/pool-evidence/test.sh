@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # pool-evidence (evidence.py): the pool-evidence line from fake cgroup v2 and
-# v1 trees, n/a for what cannot be read, a warning on an OOM kill, and exit 0
-# on every path.
+# v1 trees, the mount root only when mountinfo says it is the job's own cgroup,
+# n/a for what cannot be read, a warning on an OOM kill, and exit 0 on every
+# path.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
@@ -12,14 +13,19 @@ mib=1048576
 
 # put FILE CONTENT: a cgroup file under the fake root.
 put() { mkdir -p "$(dirname "$tmp/cg/$1")"; printf '%s\n' "$2" > "$tmp/cg/$1"; }
-fresh() { rm -rf "$tmp/cg"; mkdir -p "$tmp/cg"; printf '%s\n' "$1" > "$tmp/proc"; }
+fresh() { rm -rf "$tmp/cg" "$tmp/mountinfo"; mkdir -p "$tmp/cg"; printf '%s\n' "$1" > "$tmp/proc"; }
+# mount ROOT POINT [FSTYPE [SUPER-OPTIONS]]: one more mountinfo line.
+mount() {
+  printf '36 35 0:30 %s %s rw,nosuid,nodev,noexec,relatime shared:10 master:2 - %s cgroup %s\n' \
+    "$1" "$2" "${3:-cgroup}" "${4:-rw,memory}" >> "$tmp/mountinfo"
+}
 evidence() { # [VAR=VALUE ...]: sets out, code, line
   code=0
   : > "$tmp/out"
   : > "$tmp/summary"
   out="$(env -i PATH="$PATH" RUNNER_NAME=pool-pc-heavy-example-app-1234 GITHUB_OUTPUT="$tmp/out" \
     GITHUB_STEP_SUMMARY="$tmp/summary" POOL_EVIDENCE_CGROUP_ROOT="$tmp/cg" \
-    POOL_EVIDENCE_PROC_CGROUP="$tmp/proc" "$@" python3 -I "$here/evidence.py" 2>&1)" || code=$?
+    POOL_EVIDENCE_PROC_CGROUP="$tmp/proc" POOL_EVIDENCE_MOUNTINFO="$tmp/mountinfo" "$@" python3 -I "$here/evidence.py" 2>&1)" || code=$?
   line="$(grep '^pool-evidence: ' <<<"$out" | head -n 1 || true)"
 }
 want() { # CASE LINE-AFTER-"pool-evidence: "
@@ -108,6 +114,97 @@ evidence
 want "v1 without a limit, an old kernel without oom_kill" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=3000 limit_mb=max failcnt=7 oom_kill=n/a"
 annotated "v1 no oom_kill" notice
 
+# cgroup v1 in a container without a cgroup namespace (Docker on a v1 host):
+# the membership is the host-side path and the memory mount is a bind mount of
+# exactly that cgroup, so the figures are at the mount root.
+na="runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=n/a limit_mb=n/a failcnt=n/a oom_kill=n/a"
+own=/ci-pool.slice/docker-abc.scope
+fresh "12:memory:$own"$'\n4:cpu,cpuacct:'"$own"
+put memory/memory.max_usage_in_bytes $((3100 * mib))
+put memory/memory.limit_in_bytes $((4096 * mib))
+put memory/memory.failcnt 2
+put memory/memory.oom_control $'oom_kill_disable 0\nunder_oom 0\noom_kill 0'
+evidence
+want "v1 bind mount, no mountinfo" "$na"
+mkdir "$tmp/dir"
+evidence POOL_EVIDENCE_MOUNTINFO="$tmp/dir"
+want "v1 bind mount, mountinfo unreadable" "$na"
+: > "$tmp/mountinfo"
+evidence
+want "v1 bind mount, mountinfo empty" "$na"
+printf 'garbage\n1 2 3\n - cgroup cgroup rw,memory\n' > "$tmp/mountinfo"
+evidence
+want "v1 bind mount, mountinfo garbage" "$na"
+rm "$tmp/mountinfo"
+mount / / overlay rw
+mount "$own" "$tmp/cg/cpu,cpuacct" cgroup rw,cpu,cpuacct
+mount "$own" "$tmp/cg/memory"
+evidence
+want "v1 mount root is the membership" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=3100 limit_mb=4096 failcnt=2 oom_kill=0"
+for root in / /ci-pool.slice /ci-pool.slice/docker-abd.scope "$own/" "$own/child" /docker-abc.scope; do
+  rm "$tmp/mountinfo"
+  mount "$root" "$tmp/cg/memory"
+  evidence
+  want "v1 mount root $root is not the membership" "$na"
+done
+rm "$tmp/mountinfo"
+mount "$own" "$tmp/cg/memory" tmpfs rw,memory
+evidence
+want "v1 mount is not a cgroup mount" "$na"
+rm "$tmp/mountinfo"
+mount "$own" "$tmp/cg/memory" cgroup rw,cpu,cpuacct
+evidence
+want "v1 mount is another controller" "$na"
+rm "$tmp/mountinfo"
+mount "$own" "$tmp/cg/memory/sub"
+mount "$own" "$tmp/cg/memoryx"
+evidence
+want "v1 membership mounted somewhere else" "$na"
+rm "$tmp/mountinfo"
+mount "$own" "$tmp/cg/memory"
+mount /other "$tmp/cg/memory"
+evidence
+want "v1 a later mount at the same place" "$na"
+rm "$tmp/mountinfo"
+mount "$own" "$tmp/cg/memory"
+mount / "$tmp/cg" tmpfs rw
+evidence
+want "v1 a later mount on a parent directory" "$na"
+rm "$tmp/mountinfo"
+mount "$own" "$tmp/cg/memory"
+printf '12:memory:%s/\n' "$own" > "$tmp/proc"
+evidence
+want "v1 membership with a trailing slash" "$na"
+# The mount root wins over a same-named directory below it (that is a child).
+printf '12:memory:%s\n' "$own" > "$tmp/proc"
+put "memory$own/memory.max_usage_in_bytes" $((50 * mib))
+evidence
+want "v1 mount root, same path below it" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=3100 limit_mb=4096 failcnt=2 oom_kill=0"
+rm "$tmp/mountinfo"
+evidence
+want "v1 no mountinfo, path below the mount" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v1 peak_mb=50 limit_mb=n/a failcnt=n/a oom_kill=n/a"
+
+# cgroup v2: the same rule for a cgroup2 mount.
+na="${na/cgroup=v1/cgroup=v2}"
+fresh "0::$own"
+put cgroup.controllers "memory"
+put memory.peak $((1700 * mib))
+put memory.max $((2048 * mib))
+put memory.events $'max 1\noom_kill 0'
+evidence
+want "v2 bind mount, no mountinfo" "$na"
+mount "$own" "$tmp/cg" cgroup2 rw,nsdelegate
+evidence
+want "v2 mount root is the membership" "runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=1700 limit_mb=2048 failcnt=1 oom_kill=0"
+rm "$tmp/mountinfo"
+mount /ci-pool.slice "$tmp/cg" cgroup2 rw,nsdelegate
+evidence
+want "v2 mount root is not the membership" "$na"
+rm "$tmp/mountinfo"
+mount "$own" "$tmp/cg" cgroup rw,memory
+evidence
+want "v2 mount is a v1 mount" "$na"
+
 # Nothing readable, garbage, not a pool runner, odd runner names: still exit 0.
 fresh ""
 evidence
@@ -134,4 +231,4 @@ cases=$((cases + 1))
 [[ "$code" == 0 ]] || fail "an unwritable GITHUB_OUTPUT failed the step (exit $code)"
 grep -q '^pool-evidence: failed (' <<<"$out" || fail "an unwritable GITHUB_OUTPUT was not reported"$'\n'"$out"
 
-echo "pool-evidence: $cases cases passed (cgroup v2, v1, n/a, OOM warning, exit 0)"
+echo "pool-evidence: $cases cases passed (cgroup v2, v1, mount root by mountinfo, n/a, OOM warning, exit 0)"

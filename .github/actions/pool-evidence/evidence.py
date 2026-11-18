@@ -12,11 +12,20 @@ oom_kill  processes the kernel OOM-killed in the cgroup (memory.events
           `oom_kill`, v1 memory.oom_control `oom_kill`).
 
 A value it cannot read is `n/a`, and so is every value when the membership
-path in /proc/self/cgroup cannot be mapped under the mount (only `/` reads
-the mount root). The line goes to the log, to a notice
-(a warning when oom_kill is above 0) and to the job summary. It never fails
-the job: every path exits 0. POOL_EVIDENCE_CGROUP_ROOT (/sys/fs/cgroup) and
-POOL_EVIDENCE_PROC_CGROUP (/proc/self/cgroup) are for the tests.
+path in /proc/self/cgroup cannot be mapped under the mount. The mount root
+is read in two cases only: the membership is exactly `/` (a cgroup
+namespace), or /proc/self/mountinfo says the memory cgroup mount's root
+field equals the membership exactly (a container without a cgroup
+namespace whose /sys/fs/cgroup/memory is a bind mount of its own cgroup, as
+Docker does on cgroup v1; the same rule holds for a cgroup2 mount). Any
+other membership is looked up below the mount, and is `n/a` when it is not
+there: never another cgroup's figures.
+
+The line goes to the log, to a notice (a warning when oom_kill is above 0)
+and to the job summary. It never fails the job: every path exits 0.
+POOL_EVIDENCE_CGROUP_ROOT (/sys/fs/cgroup), POOL_EVIDENCE_PROC_CGROUP
+(/proc/self/cgroup) and POOL_EVIDENCE_MOUNTINFO (/proc/self/mountinfo) are
+for the tests.
 """
 import os
 import re
@@ -24,12 +33,13 @@ import sys
 
 MB = 1024 * 1024
 UNLIMITED_V1 = 1 << 60   # v1 reports "no limit" as a page-rounded 2^63-1
+MOUNTINFO_MAX = 1 << 20  # a longer mountinfo is not trusted: it may be cut mid-list
 
 
-def read(path):
+def read(path, limit=65536, encoding="ascii"):
     try:
-        with open(path, encoding="ascii") as f:
-            return f.read(65536).strip()
+        with open(path, encoding=encoding) as f:
+            return f.read(limit).strip()
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -50,7 +60,37 @@ def mb(value):
     return "n/a" if value is None else str(value // MB)
 
 
-def own_paths(root, proc):
+def unescape(field):
+    """A mountinfo path field: space, tab, newline and backslash are \\ooo."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+def mount_root(mountinfo, point, fstype, option):
+    """-> the root field (the cgroup path the mount shows) of the FSTYPE mount
+    visible at POINT, None when mountinfo cannot be read, nothing of that type
+    (with OPTION among its super options, when given) is mounted exactly
+    there, or a later mount covers it."""
+    text = read(mountinfo, MOUNTINFO_MAX, "latin-1")
+    if text is None or len(text) >= MOUNTINFO_MAX:
+        return None
+    points = {point, os.path.realpath(point)}
+    found = None
+    for line in text.splitlines():
+        # id parent major:minor root mount-point options [optional...] - fstype source super-options
+        left, sep, right = line.partition(" - ")
+        fields, tail = left.split(" "), right.split(" ")
+        if not sep or len(fields) < 6 or len(tail) < 3:
+            continue
+        at = unescape(fields[4])
+        if at in points:
+            ours = tail[0] == fstype and (option is None or option in tail[2].split(","))
+            found = unescape(fields[3]) if ours else None
+        elif any(p.startswith(at.rstrip("/") + "/") for p in points):
+            found = None   # a later mount on a parent directory hides ours
+    return found
+
+
+def own_paths(root, proc, mountinfo):
     """-> (version, directory) of this process's memory cgroup; directory None when its
     membership path cannot be mapped under the mount; (None, None) without a memory cgroup."""
     text = read(proc) or ""
@@ -63,11 +103,13 @@ def own_paths(root, proc):
             v2 = parts[2]
         elif "memory" in parts[1].split(","):
             v1 = parts[2]
-    def inside(base, rel):
+    def inside(base, rel, fstype, option):
         # The mount root is ours only when the membership is exactly "/" (a cgroup
-        # namespace: the container). An empty path, anything with "..", "." or an
-        # empty part, or a directory we cannot see is not mapped: its figures are
-        # n/a, never the root's.
+        # namespace: the container), or when mountinfo says the mount at BASE shows
+        # exactly the membership path (no cgroup namespace, the container's own
+        # cgroup bind-mounted). An empty path, anything with "..", "." or an empty
+        # part, or a directory we cannot see is not mapped: its figures are n/a,
+        # never the root's.
         if rel == "/":
             return base
         if not rel:
@@ -75,17 +117,19 @@ def own_paths(root, proc):
         parts = rel.split("/")
         if parts[0] != "" or any(p in ("", ".", "..") for p in parts[1:]):
             return None
+        if mount_root(mountinfo, base, fstype, option) == rel:
+            return base
         path = os.path.join(base, *parts[1:])
         return path if os.path.isdir(path) else None
     if v1 is not None and os.path.isdir(os.path.join(root, "memory")):
-        return "v1", inside(os.path.join(root, "memory"), v1)
+        return "v1", inside(os.path.join(root, "memory"), v1, "cgroup", "memory")
     if v2 is not None and os.path.exists(os.path.join(root, "cgroup.controllers")):
-        return "v2", inside(root, v2)
+        return "v2", inside(root, v2, "cgroup2", None)
     return None, None
 
 
-def evidence(root, proc):
-    version, path = own_paths(root, proc)
+def evidence(root, proc, mountinfo):
+    version, path = own_paths(root, proc, mountinfo)
     figures = {"peak": None, "limit": None, "failcnt": None, "oom_kill": None}
     if path is None:
         pass
@@ -117,7 +161,8 @@ def main():
     pool = "yes" if runner.startswith("pool-") else "no"
     try:
         version, f = evidence(os.environ.get("POOL_EVIDENCE_CGROUP_ROOT") or "/sys/fs/cgroup",
-                              os.environ.get("POOL_EVIDENCE_PROC_CGROUP") or "/proc/self/cgroup")
+                              os.environ.get("POOL_EVIDENCE_PROC_CGROUP") or "/proc/self/cgroup",
+                              os.environ.get("POOL_EVIDENCE_MOUNTINFO") or "/proc/self/mountinfo")
     except Exception as exc:  # evidence must never fail the job
         version, f = f"error ({type(exc).__name__})", {"peak": None, "limit": None,
                                                        "failcnt": None, "oom_kill": None}
