@@ -549,6 +549,74 @@ want "full, nobody waiting yet: tie to srv" srv
 pick POOL_MODE=pool POOL_MAX_BACKLOG=0
 want "mode pool ignores max-backlog" srv
 
+### Rule 6, fill prefer: prefer takes the run while it has a free main-class slot.
+reset
+var pc status-valid-pc-accepting.json 10 'classes.heavy.slots=2'
+pick POOL_FILL=prefer POOL_PREFER=pc
+want "fill prefer: pc 1 free, srv 2 free" pc
+says "fill prefer pc free" notice "pool-pick: auto picks pc: pc has 1 free heavy slot(s) (fill prefer)"
+[[ "$reason" == "pc has 1 free heavy slot(s) (fill prefer)" ]] || fail "fill prefer: reason output '$reason'"
+pick POOL_FILL=prefer POOL_PREFER=pc POOL_MODE=pool
+want "fill prefer, mode pool: pc 1 free, srv 2 free" pc
+says "fill prefer mode pool" notice "pool-pick: pool picks pc: pc has 1 free heavy slot(s) (fill prefer)"
+pick POOL_PREFER=pc
+want "fill unset: pc 1 free, srv 2 free spreads to srv" srv
+says "fill unset" notice "pool-pick: auto picks srv: srv has 2 free heavy slot(s)"
+pick POOL_FILL=spread POOL_PREFER=pc
+want "fill spread: pc 1 free, srv 2 free spreads to srv" srv
+[[ "$reason" == "srv has 2 free heavy slot(s)" ]] || fail "fill spread: reason output '$reason'"
+pick POOL_FILL=prefer
+want "fill prefer with the default prefer srv" srv
+says "fill prefer default" notice "srv has 2 free heavy slot(s) (fill prefer)"
+pick POOL_FILL=prefer POOL_PREFER=pc POOL_MODE=srv
+want "fill prefer does not move a pinned host" srv
+says "fill prefer pinned" notice "pinned to srv (2 free heavy slot(s))"
+pick POOL_FILL=prefer POOL_PREFER=pc POOL_CLASSES=light
+want "fill prefer, light only: pc 1 free light" pc
+says "fill prefer light" notice "pc has 1 free light slot(s) (fill prefer)"
+# pc full, srv free: the most free slots, as with spread.
+reset
+pick POOL_FILL=prefer POOL_PREFER=pc
+want "fill prefer: pc full, srv free" srv
+[[ "$reason" == "srv has 2 free heavy slot(s)" ]] || fail "fill prefer, pc full: reason output '$reason'"
+# Both full: the smallest backlog, max-backlog as before.
+var pc status-valid-pc-accepting.json 10 'classes.heavy.queued=1'
+var srv status-valid-srv-accepting.json 10 'repos=["example-app"]' 'classes.heavy.busy=2'
+pick POOL_FILL=prefer POOL_PREFER=pc
+want "fill prefer, full: srv 0 waiting, pc 1" srv
+says "fill prefer full" notice "pool full, queued on srv (1 job(s) waiting, this run included)"
+pick POOL_FILL=prefer POOL_PREFER=pc POOL_MAX_BACKLOG=0
+want "fill prefer, full, max-backlog 0" github
+says "fill prefer max-backlog 0" warning "pool full: 1 job(s) would wait on srv, over max-backlog 0"
+# A backlog tie goes to prefer.
+var pc status-valid-pc-accepting.json 10
+pick POOL_FILL=prefer POOL_PREFER=pc
+want "fill prefer, full, backlog tie" pc
+says "fill prefer backlog tie" notice "pool full, queued on pc (1 job(s) waiting, this run included)"
+# pc not a candidate: not accepting, stale or not listing the repository.
+reset
+var pc status-valid-pc-accepting.json 10 'classes.heavy.slots=3' 'state="held"'
+pick POOL_FILL=prefer POOL_PREFER=pc
+want "fill prefer: pc held with room" srv
+says "fill prefer pc held" notice "srv has 2 free heavy slot(s)"
+var pc status-valid-pc-accepting.json 10 'classes.heavy.slots=3' 'state="paused"'
+pick POOL_FILL=prefer POOL_PREFER=pc
+want "fill prefer: pc paused with room" srv
+var pc status-valid-pc-accepting.json 121 'classes.heavy.slots=3'
+pick POOL_FILL=prefer POOL_PREFER=pc
+want "fill prefer: pc stale with room" srv
+var pc status-valid-pc-accepting.json 10 'classes.heavy.slots=3' 'repos=["pool-canary"]'
+pick POOL_FILL=prefer POOL_PREFER=pc
+want "fill prefer: pc does not list the repository" srv
+# An unknown fill fails before anything is read.
+for bad in Prefer most spread,prefer fill; do
+  pick POOL_FILL="$bad"
+  cases=$((cases + 1))
+  [[ "$code" == 1 && -z "$got" ]] || fail "fill $bad was accepted: exit $code, runner '$got'"
+  grep -q '^::error title=pool-pick::fill must be unset, spread or prefer' <<<"$out" || fail "fill $bad: no error"$'\n'"$out"
+  no_lookup "fill $bad"
+done
+
 ### Rule 7: fixed modes.
 reset
 pick POOL_MODE=pc

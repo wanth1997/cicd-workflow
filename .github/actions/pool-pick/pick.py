@@ -22,9 +22,12 @@ Rules, in order:
    GitHub clock), state accepting, this repository in `repos`, a slot for
    every class the workflow uses.
 6. auto: the candidate with the most free slots of the main class
-   (heavy when used), a tie goes to `prefer`. When every candidate is full
-   the run queues on the one with the smallest backlog, unless max-backlog
-   is set and reached. No candidate: GitHub-hosted, with each host's reason.
+   (heavy when used), a tie goes to `prefer`. With fill prefer, `prefer`
+   takes the run whenever it is a candidate with a free main-class slot;
+   otherwise the most free slots, as with fill spread. When every candidate
+   is full the run queues on the one with the smallest backlog (a tie goes
+   to `prefer`), unless max-backlog is set and reached. No candidate:
+   GitHub-hosted, with each host's reason. An unknown fill fails the step.
 7. pool, or a host id: fixed. A stale or not accepting host is still
    picked (the jobs wait) as long as its status is readable, it lists this
    repository and it has the slots; pool picks among the accepting hosts
@@ -49,6 +52,7 @@ CLASSES = ("heavy", "light")
 HOST_RE = re.compile(r"^(pc|srv([2-9]|[1-9][0-9]+)?)$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 STATES = ("accepting", "paused", "held", "draining")
+FILLS = ("spread", "prefer")
 TRUSTED_VISIBILITY = ("private", "internal")
 PER_PAGE = 100
 MAX_PAGES = 5
@@ -113,6 +117,9 @@ def read_inputs():
     prefer = env("POOL_PREFER") or ("srv" if "srv" in hosts else hosts[0])
     if prefer not in hosts:
         raise InputError(f"prefer must be one of {', '.join(hosts)}")
+    fill = env("POOL_FILL") or "spread"
+    if fill not in FILLS:
+        raise InputError("fill must be unset, spread or prefer")
     max_backlog = env("POOL_MAX_BACKLOG")
     if max_backlog and not re.fullmatch(r"[0-9]{1,6}", max_backlog):
         raise InputError("max-backlog must be empty or a non-negative integer")
@@ -129,6 +136,7 @@ def read_inputs():
         "classes": classes,
         "main": "heavy" if "heavy" in classes else classes[0],
         "prefer": prefer,
+        "fill": fill,
         "max_backlog": int(max_backlog) if max_backlog else None,
         "group": group,
         "status_repo": status_repo,
@@ -368,6 +376,10 @@ def choose(cands, cfg, honour_backlog):
     """-> (host, reason) or (None, reason) for a backlog fallback."""
     main = cfg["main"]
     roomy = [h for h in cands if h["free"][main] > 0]
+    if cfg["fill"] == "prefer":
+        first = [h for h in roomy if h["host"] == cfg["prefer"]]
+        if first:
+            return first[0], f"{first[0]['host']} has {first[0]['free'][main]} free {main} slot(s) (fill prefer)"
     if roomy:
         best = order(roomy, lambda h: -h["free"][main], cfg)[0]
         return best, f"{best['host']} has {best['free'][main]} free {main} slot(s)"
