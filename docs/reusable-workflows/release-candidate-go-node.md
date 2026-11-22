@@ -1,8 +1,8 @@
 # `release-candidate-go-node.yml`
 
-> Status: draft reusable workflow
+> Status: active reusable workflow
 >
-> Last updated: 2026-05-25
+> Last updated: 2026-11-22
 
 Reusable Release Candidate workflow for a service with:
 
@@ -32,6 +32,38 @@ fails, so consumers must only deploy artifacts from successful Release
 Candidate runs. The reusable staging and production preflight workflows enforce
 that check when resolving a release run.
 
+## Inputs
+
+| Input | Required | Default |
+|---|---:|---|
+| `service_name` | yes | |
+| `go_version_file` | yes | |
+| `go_dependency_file` | yes | |
+| `node_version` | yes | |
+| `frontend_dir` | yes | |
+| `frontend_lockfile` | yes | |
+| `run_backend_full_tests` | no | `true` |
+| `backend_shards_json` | yes | |
+| `backend_ci_command` | yes | |
+| `migration_check_command` | yes | |
+| `frontend_ci_command` | yes | |
+| `build_release_command` | yes | |
+| `release_artifact_prefix` | yes | |
+| `postgres_image` | no | `postgres:15` |
+| `postgres_db` | no | `app_ci` |
+| `postgres_user` | no | `app` |
+| `postgres_password` | no | `app` |
+| `require_clean` | no | `"1"` |
+| `artifact_retention_days` | no | `14` |
+| `telegram_chat_id` | no | empty, disables Telegram |
+| `telegram_notify_on` | no | `failure` |
+
+## Secrets
+
+| Secret | Required | Purpose |
+|---|---:|---|
+| `telegram_bot_token` | no | Service repo Telegram bot token used only when `telegram_chat_id` is set. |
+
 ## Telegram Notifications
 
 When enabled, the final `notify-telegram` job sends one concise status message
@@ -41,12 +73,17 @@ Set `telegram_chat_id` from a service repo variable and pass
 `telegram_bot_token` from a service repo secret. `telegram_notify_on` accepts
 `failure`, `always`, or `never`.
 
+## Output Artifacts
+
+- `<release_artifact_prefix><release_id>` (release directory built by `build_release_command`)
+- `<service_name>-backend-full-<shard>-go-test-report` when `run_backend_full_tests` is true (`GO_TEST_JSON`)
+
 ## Wrapper Example
 
 ```yaml
 jobs:
   release-candidate:
-    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-go-node.yml@v0.8.0
+    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-go-node.yml@v0.11.1
     with:
       service_name: zenincome
       go_version_file: go.mod

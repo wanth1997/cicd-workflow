@@ -1,8 +1,8 @@
 # `pr-ci-go-node.yml`
 
-> Status: draft reusable workflow
+> Status: active reusable workflow
 >
-> Last updated: 2026-11-15
+> Last updated: 2026-11-22
 
 Reusable PR CI workflow for a service with:
 

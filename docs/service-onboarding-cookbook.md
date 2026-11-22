@@ -2,7 +2,7 @@
 
 > Status: onboarding guide
 >
-> Last updated: 2026-05-25
+> Last updated: 2026-11-22
 >
 > Reference rollouts: Linkcourt, also known as PP Club; ZenIncome
 
@@ -32,7 +32,7 @@ Actions workflow。目標是讓每個 service 只維護自己的業務腳本與�
 - 選擇符合 runtime family 的 reusable workflow：Python backend 用
   `*-node-python.yml`，Go backend 用 `*-go-node.yml`。不要為了套用共用流程而把
   service script 寫成偽裝成另一個 runtime。
-- 所有 caller workflow 都要 pin 到 tag，例如 `@v0.8.0`。不要用 moving
+- 所有 caller workflow 都要 pin 到 tag，例如 `@v0.11.1`。不要用 moving
   `main`。
 - 先上無 secret、無遠端副作用的流程：PR CI、Release Candidate、Deploy Dry
   Run、runner-local Deploy Staging、Production Preflight。
@@ -53,8 +53,8 @@ Actions workflow。目標是讓每個 service 只維護自己的業務腳本與�
 |---|---|
 | Service id | 穩定、短、小寫，例如 Linkcourt/PP Club 使用 `ppclub`。artifact prefix 會用到它。 |
 | Default branch | `main` 或 `master`。所有 wrapper 的 trigger 與 `release_branch` 要一致。 |
-| Runtime | Python backend 與 Node frontend 的版本，例如 Python `3.11`、Node `24`。 |
-| Repo layout | backend/frontend 目錄、Python dependency file、NPM lockfile 都要固定。 |
+| Runtime | Backend（Python `python_version` 或 Go `go_version_file`）與 Node frontend 版本（例如 Python `3.11` / Go `go.mod`、Node `24`）。 |
+| Repo layout | backend/frontend 目錄、backend dependency file（Python `backend_dependency_file` 或 Go `go_dependency_file`）、NPM lockfile 都要固定。 |
 | Backend suites | 至少要能分出 fast、migration regression、full shards。 |
 | Migration check | 必須能使用 workflow 提供的 ephemeral `DATABASE_URL`，不能打到真實 DB。 |
 | Frontend checks | 必須能用單一 script 完成 install、lint、test、build。 |
@@ -69,7 +69,7 @@ Reusable workflow 會呼叫 service repo 裡的 command。這些 command 要從 
 
 | Command input | Workflow 提供 | Service script 必須做到 |
 |---|---|---|
-| `backend_ci_command` | `BACKEND_TEST_SUITE`、`PYTEST_JUNIT_XML` | 依 suite 跑 pytest，並把 JUnit XML 寫到 `PYTEST_JUNIT_XML`。 |
+| `backend_ci_command` | `BACKEND_TEST_SUITE`；Python 提供 `PYTEST_JUNIT_XML`，Go 提供 `GO_TEST_JSON` | 依 suite 跑測試：Python 寫 JUnit XML 到 `PYTEST_JUNIT_XML`；Go 寫 `go test -json` 輸出到 `GO_TEST_JSON`。 |
 | `migration_check_command` | Ephemeral `DATABASE_URL` | 對乾淨 PostgreSQL 跑 migration，並檢查 schema drift。 |
 | `frontend_ci_command` | Node runtime 與 npm cache | 安裝 frontend dependencies，跑 lint/test/build。 |
 | `build_release_command` | `REQUIRE_CLEAN` | 建立 release directory，並寫入 `$GITHUB_OUTPUT` 的 `release_id` 與 `release_dir`。 |
@@ -91,7 +91,7 @@ Reusable workflow 會呼叫 service repo 裡的 command。這些 command 要從 
 - `<target-root>/current/backend` 存在
 - `<target-root>/current/frontend-dist` 存在
 
-`release-manifest.json` 至少要能讓 staging/prod proof 比對：
+`release-manifest.json` 至少要能讓 staging/prod proof 比對（`database` 欄位依服務使用 `alembic_head` 或對應的 Go migration revision）：
 
 ```json
 {
@@ -126,232 +126,17 @@ Telegram 通知設定：
 - `telegram_notify_on: never`（v0.8.0 起）整個 `notify-telegram` job 會被跳過，不開 runner、
   不計 Actions 分鐘。service 已用 `workflow_run` 監聽器統一發失敗通知時用這個，避免重複通知。
 
-### `.github/workflows/pr-ci.yml`
+### Wrapper 範例索引
 
-```yaml
-name: PR CI
+各 caller workflow 的完整 YAML 範本與精確 input 表集中在以下檔案（請統一釘選最新 release tag，如 `@v0.11.1`）：
 
-on:
-  pull_request:
-    branches:
-      - main
-
-permissions:
-  contents: read
-
-jobs:
-  pr-ci:
-    uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.8.0
-    with:
-      service_name: example-service
-      python_version: "3.11"
-      node_version: "24"
-      backend_dir: backend
-      frontend_dir: frontend
-      backend_dependency_file: backend/requirements.txt
-      frontend_lockfile: frontend/package-lock.json
-      backend_fast_suite: fast
-      backend_migration_suite: migration
-      run_backend_full_tests: true
-      backend_full_shards_json: >
-        [
-          {"shard":"api","suite":"full-api","report":"backend-full-api-pytest.xml"},
-          {"shard":"domain","suite":"full-domain","report":"backend-full-domain-pytest.xml"}
-        ]
-      backend_ci_command: ./ops/ci-cd/scripts/run-backend-ci.sh
-      migration_check_command: ./ops/ci-cd/scripts/run-backend-migration-check.sh
-      frontend_ci_command: ./ops/ci-cd/scripts/run-frontend-ci.sh
-      telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
-      telegram_notify_on: failure
-    secrets:
-      telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-```
-
-### `.github/workflows/release-candidate.yml`
-
-```yaml
-name: Release Candidate
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-
-permissions:
-  contents: read
-
-jobs:
-  release-candidate:
-    uses: wanth1997/cicd-workflow/.github/workflows/release-candidate-node-python.yml@v0.8.0
-    with:
-      service_name: example-service
-      python_version: "3.11"
-      node_version: "24"
-      backend_dependency_file: backend/requirements.txt
-      frontend_lockfile: frontend/package-lock.json
-      run_backend_full_tests: false
-      backend_shards_json: >
-        [
-          {"shard":"api","suite":"full-api","report":"backend-full-api-pytest.xml"},
-          {"shard":"domain","suite":"full-domain","report":"backend-full-domain-pytest.xml"}
-        ]
-      backend_ci_command: ./ops/ci-cd/scripts/run-backend-ci.sh
-      migration_check_command: ./ops/ci-cd/scripts/run-backend-migration-check.sh
-      frontend_ci_command: ./ops/ci-cd/scripts/run-frontend-ci.sh
-      build_release_command: ./ops/ci-cd/build-release.sh
-      release_artifact_prefix: example-service-release-
-      telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
-      telegram_notify_on: failure
-    secrets:
-      telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-```
-
-### `.github/workflows/deploy-dry-run.yml`
-
-```yaml
-name: Deploy Dry Run
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  deploy-dry-run:
-    uses: wanth1997/cicd-workflow/.github/workflows/deploy-dry-run-artifact.yml@v0.8.0
-    with:
-      service_name: example-service
-      python_version: "3.11"
-      node_version: "24"
-      backend_dependency_file: backend/requirements.txt
-      frontend_lockfile: frontend/package-lock.json
-      run_backend_fast_tests: true
-      backend_fast_suite: fast
-      backend_ci_command: ./ops/ci-cd/scripts/run-backend-ci.sh
-      build_release_command: ./ops/ci-cd/build-release.sh
-      release_install_command: ./ops/ci-cd/deploy/release-install.sh
-      dry_run_target_root: .artifacts/deploy-target
-      telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
-      telegram_notify_on: failure
-    secrets:
-      telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-```
-
-### `.github/workflows/deploy-staging.yml`
-
-```yaml
-name: Deploy Staging
-
-on:
-  workflow_dispatch:
-    inputs:
-      release_run_id:
-        description: Successful Release Candidate run id. Empty means latest successful run.
-        required: false
-        type: string
-      staging_base_url:
-        description: Optional read-only staging base URL.
-        required: false
-        type: string
-      tenant_hosts:
-        description: Optional comma-separated tenant hosts for smoke checks.
-        required: false
-        type: string
-
-permissions:
-  actions: read
-  contents: read
-
-jobs:
-  deploy-staging-runner-local:
-    uses: wanth1997/cicd-workflow/.github/workflows/deploy-staging-artifact.yml@v0.8.0
-    with:
-      service_name: example-service
-      python_version: "3.11"
-      release_run_id: ${{ inputs.release_run_id }}
-      release_workflow_name: Release Candidate
-      release_branch: main
-      release_artifact_pattern: example-service-release-*
-      release_install_command: ./ops/ci-cd/deploy/release-install.sh
-      runner_target_root: .artifacts/staging-target
-      staging_base_url: ${{ inputs.staging_base_url }}
-      tenant_hosts: ${{ inputs.tenant_hosts }}
-      staging_smoke_command: ./ops/ci-cd/deploy/staging-smoke.sh
-      staging_proof_artifact_prefix: staging-deploy-
-      telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
-      telegram_notify_on: failure
-    secrets:
-      telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-```
-
-### `.github/workflows/production-preflight.yml`
-
-```yaml
-name: Production Preflight
-
-on:
-  workflow_dispatch:
-    inputs:
-      release_run_id:
-        description: Successful Release Candidate run id. Empty means latest successful run.
-        required: false
-        type: string
-      staging_run_id:
-        description: Successful Deploy Staging run id. Empty means latest matching proof.
-        required: false
-        type: string
-      require_remote_staging:
-        description: Require a remote-ssh staging proof before production preflight.
-        required: false
-        type: boolean
-        default: false
-      production_base_url:
-        description: Optional read-only production health URL.
-        required: false
-        type: string
-      confirm_production_health_check:
-        description: Must be CALL_PRODUCTION_HEALTH to call production_base_url.
-        required: false
-        type: string
-
-permissions:
-  actions: read
-  contents: read
-
-jobs:
-  production-gate:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - run: echo "Production environment gate passed."
-
-  production-preflight:
-    needs: production-gate
-    uses: wanth1997/cicd-workflow/.github/workflows/production-preflight-artifact.yml@v0.8.0
-    with:
-      service_name: example-service
-      python_version: "3.11"
-      release_run_id: ${{ inputs.release_run_id }}
-      staging_run_id: ${{ inputs.staging_run_id }}
-      release_workflow_name: Release Candidate
-      staging_workflow_name: Deploy Staging
-      release_branch: main
-      release_artifact_pattern: example-service-release-*
-      staging_proof_artifact_prefix: staging-deploy-
-      preflight_artifact_prefix: production-preflight-
-      release_install_command: ./ops/ci-cd/deploy/release-install.sh
-      runner_target_root: .artifacts/production-preflight-target
-      require_remote_staging: ${{ inputs.require_remote_staging }}
-      production_base_url: ${{ inputs.production_base_url }}
-      confirm_production_health_check: ${{ inputs.confirm_production_health_check }}
-      health_check_command: ./ops/ci-cd/deploy/health-check.sh
-      telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
-      telegram_notify_on: failure
-    secrets:
-      telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-```
+| Caller workflow | 對應 reusable workflow 與 Wrapper Example |
+|---|---|
+| `.github/workflows/pr-ci.yml` | Python+Node：[`examples/pr-ci-wrapper.yml`](../examples/pr-ci-wrapper.yml)、[`pr-ci-node-python.md`](reusable-workflows/pr-ci-node-python.md)；Go+Node：[`pr-ci-go-node.md`](reusable-workflows/pr-ci-go-node.md) |
+| `.github/workflows/release-candidate.yml` | Python+Node：[`release-candidate-node-python.md`](reusable-workflows/release-candidate-node-python.md#wrapper-example)；Go+Node：[`release-candidate-go-node.md`](reusable-workflows/release-candidate-go-node.md#wrapper-example) |
+| `.github/workflows/deploy-dry-run.yml` | [`deploy-dry-run-artifact.md`](reusable-workflows/deploy-dry-run-artifact.md#wrapper-example) |
+| `.github/workflows/deploy-staging.yml` | [`deploy-staging-artifact.md`](reusable-workflows/deploy-staging-artifact.md#wrapper-example) |
+| `.github/workflows/production-preflight.yml` | [`production-preflight-artifact.md`](reusable-workflows/production-preflight-artifact.md#example-caller) |
 
 ## 推進順序
 
@@ -408,7 +193,7 @@ jobs:
 | Production health 被拒絕 | `production_base_url` 不為空時，`confirm_production_health_check` 必須精確等於 `CALL_PRODUCTION_HEALTH`，且要提供 `health_check_command`。 |
 | Migration check 打到真實 DB | `migration_check_command` 沒有使用 workflow 注入的 ephemeral `DATABASE_URL`。 |
 | Branch protection 卡住 | Required check names 還是舊 workflow 名稱，或 reusable workflow 實際 check names 尚未更新。 |
-| Pytest report 沒上傳 | Backend script 沒有把 JUnit XML 寫到 `PYTEST_JUNIT_XML`。 |
+| Test report 沒上傳 | Backend script 沒有把 JUnit XML 寫到 `PYTEST_JUNIT_XML`（Python）或把 `go test -json` 輸出寫到 `GO_TEST_JSON`（Go）。 |
 
 ## Onboarding Ticket Template
 
@@ -417,11 +202,11 @@ jobs:
 
 - Service id:
 - Default branch:
-- Python version:
+- Backend runtime (`python_version` or `go_version_file`):
 - Node version:
-- Backend dir:
+- Backend dir (Python PR CI):
 - Frontend dir:
-- Backend dependency file:
+- Backend dependency file (`backend_dependency_file` or `go_dependency_file`):
 - Frontend lockfile:
 - Release artifact prefix:
 - Workflow tag:

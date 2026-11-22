@@ -1,8 +1,8 @@
 # Reusable Workflow Service Contract
 
-> Status: draft contract
+> Status: active contract
 >
-> Last updated: 2026-05-22
+> Last updated: 2026-11-22
 
 This document defines what a service repository must provide when it consumes
 the reusable workflows in this public repository.
@@ -33,17 +33,42 @@ Service repositories own application behavior:
 - GitHub Environment secrets and variables
 - production approval decisions
 
-## Required Common Inputs
+## Common Inputs by Family
 
-| Input | Meaning |
-|---|---|
-| `service_name` | Stable service id used in summaries and artifact names. |
-| `python_version` | Python version for backend jobs. |
-| `node_version` | Node.js version for frontend jobs. |
-| `backend_dir` | Backend source directory. |
-| `frontend_dir` | Frontend source directory. |
-| `backend_dependency_file` | Pip dependency file used for cache and install. |
-| `frontend_lockfile` | NPM lockfile used for cache. |
+Exact per-workflow input tables live in `docs/reusable-workflows/*.md`. Across
+the 7 reusable workflows, inputs group by family:
+
+### All Reusable Workflows
+
+| Input | Required | Meaning |
+|---|---:|---|
+| `service_name` | yes | Stable service id used in summaries and artifact names. |
+| `artifact_retention_days` | no | Uploaded artifact retention in days (default `14`). |
+| `telegram_chat_id` | no | Optional Telegram chat id; empty disables Telegram. |
+| `telegram_notify_on` | no | `failure` (default), `always`, or `never` (skips the notify job). |
+
+### Python Family (`*-node-python.yml`, `deploy-*-artifact.yml`, `production-preflight-artifact.yml`)
+
+| Input | Applies to | Meaning |
+|---|---|---|
+| `python_version` | All Python-family workflows | Python version for backend or verification jobs. |
+| `backend_dependency_file` | `pr-ci-node-python.yml`, `release-candidate-node-python.yml`, `deploy-dry-run-artifact.yml` | Pip dependency file used for cache and install. |
+| `backend_dir` | `pr-ci-node-python.yml` | Backend source directory. |
+
+### Go Family (`*-go-node.yml`)
+
+| Input | Applies to | Meaning |
+|---|---|---|
+| `go_version_file` | `pr-ci-go-node.yml`, `release-candidate-go-node.yml` | Path to `go.mod` or version file for `actions/setup-go`. |
+| `go_dependency_file` | `pr-ci-go-node.yml`, `release-candidate-go-node.yml` | Path to `go.sum` used for Go module cache key. |
+
+### Node Build Workflows (`pr-ci-*.yml`, `release-candidate-*.yml`, `deploy-dry-run-artifact.yml`)
+
+| Input | Applies to | Meaning |
+|---|---|---|
+| `node_version` | PR CI, Release Candidate, Deploy Dry Run | Node.js version for frontend jobs. |
+| `frontend_lockfile` | PR CI, Release Candidate, Deploy Dry Run | NPM lockfile used for cache. |
+| `frontend_dir` | `pr-ci-node-python.yml`, `pr-ci-go-node.yml`, `release-candidate-go-node.yml` | Frontend source directory. |
 
 ## Secret Boundary
 
@@ -83,6 +108,9 @@ When a service migrates from local workflow YAML to reusable workflows:
 | `deploy-dry-run-artifact.yml` | active | none | none |
 | `deploy-staging-artifact.yml` | active for runner-local staging proof | none | none |
 | `production-preflight-artifact.yml` | active for runner-local production preflight | none | none unless caller explicitly confirms a read-only health URL |
+
+For self-hosted runner-pool composite actions (`.github/actions/pool-pick` and
+`.github/actions/pool-evidence`), see [Pool Actions](../README.md#pool-actions).
 
 Remote SSH staging and real production deploy workflows are intentionally not
 part of the current reusable surface. They should be extracted only after the

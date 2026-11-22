@@ -2,7 +2,7 @@
 
 > Status: active reusable workflow for runner-local production preflight
 >
-> Last updated: 2026-05-25
+> Last updated: 2026-11-22
 
 Reusable production preflight workflow for proving that a successful Release
 Candidate artifact matches a staging proof and can be installed on a GitHub
@@ -93,7 +93,7 @@ jobs:
 
   production-preflight:
     needs: production-gate
-    uses: wanth1997/cicd-workflow/.github/workflows/production-preflight-artifact.yml@v0.4.0
+    uses: wanth1997/cicd-workflow/.github/workflows/production-preflight-artifact.yml@v0.11.1
     with:
       service_name: ppclub
       python_version: "3.11"
