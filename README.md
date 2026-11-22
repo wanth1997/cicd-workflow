@@ -247,7 +247,7 @@ here.
 Consuming services should pin reusable workflows by tag:
 
 ```yaml
-uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.9.0
+uses: wanth1997/cicd-workflow/.github/workflows/pr-ci-node-python.yml@v0.11.1
 ```
 
 Do not consume workflows from a moving `main` branch.

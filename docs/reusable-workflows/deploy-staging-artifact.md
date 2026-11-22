@@ -2,7 +2,7 @@
 
 > Status: active reusable workflow for runner-local staging proof
 >
-> Last updated: 2026-05-25
+> Last updated: 2026-11-22
 
 Reusable staging proof workflow for downloading an existing successful Release
 Candidate artifact and installing it into an ephemeral GitHub runner target.
@@ -66,7 +66,7 @@ The artifact contains:
 jobs:
   deploy-staging-runner-local:
     if: ${{ inputs.deploy_target == 'runner-local' }}
-    uses: wanth1997/cicd-workflow/.github/workflows/deploy-staging-artifact.yml@v0.3.0
+    uses: wanth1997/cicd-workflow/.github/workflows/deploy-staging-artifact.yml@v0.11.1
     with:
       service_name: ppclub
       python_version: "3.11"
