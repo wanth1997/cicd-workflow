@@ -25,6 +25,17 @@ on:
       backend_shards_json:
         required: true
         type: string
+      # The caller sets these only when it has proof that the exact tree of
+      # this commit already passed the same checks (e.g. in pull request CI).
+      # false (the default) runs the job as before.
+      skip_backend_migration:
+        required: false
+        type: boolean
+        default: false
+      skip_frontend_checks:
+        required: false
+        type: boolean
+        default: false
       backend_ci_command:
         required: true
         type: string
@@ -174,6 +185,7 @@ jobs:
 
   backend-migration:
     name: backend-migration
+    if: ${{ !inputs.skip_backend_migration }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -209,6 +221,7 @@ jobs:
 
   frontend-checks:
     name: frontend-checks
+    if: ${{ !inputs.skip_frontend_checks }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -232,6 +245,17 @@ jobs:
     needs:
       - backend-migration
       - frontend-checks
+    # A check job must have succeeded, or been skipped because the caller
+    # asked for it; any other result (failure, cancelled, an unrequested
+    # skip) builds nothing.
+    if: >-
+      ${{
+        !cancelled()
+        && (needs.backend-migration.result == 'success'
+            || (inputs.skip_backend_migration && needs.backend-migration.result == 'skipped'))
+        && (needs.frontend-checks.result == 'success'
+            || (inputs.skip_frontend_checks && needs.frontend-checks.result == 'skipped'))
+      }}
     steps:
       - uses: actions/checkout@v6
 
@@ -287,6 +311,8 @@ jobs:
           WORKFLOW_STAGE: Release Candidate
           RELEASE_ID: ${{ needs['build-release'].outputs.release_id }}
           RUN_BACKEND_FULL_TESTS: ${{ inputs.run_backend_full_tests }}
+          SKIP_BACKEND_MIGRATION: ${{ inputs.skip_backend_migration }}
+          SKIP_FRONTEND_CHECKS: ${{ inputs.skip_frontend_checks }}
           NEEDS_JSON: ${{ toJson(needs) }}
         run: |
           python - <<'PY'
@@ -324,6 +350,12 @@ jobs:
           }
           if os.environ.get("RUN_BACKEND_FULL_TESTS", "true").lower() != "true":
               job_results.pop("backend-full-tests", None)
+          for job_name, skip_env in (
+              ("backend-migration", "SKIP_BACKEND_MIGRATION"),
+              ("frontend-checks", "SKIP_FRONTEND_CHECKS"),
+          ):
+              if os.environ.get(skip_env, "false").lower() == "true" and job_results.get(job_name) == "skipped":
+                  job_results.pop(job_name)
           results = list(job_results.values())
           if any(result == "failure" for result in results):
               status = "failed"

@@ -32,6 +32,15 @@ fails, so consumers must only deploy artifacts from successful Release
 Candidate runs. The reusable staging and production preflight workflows enforce
 that check when resolving a release run.
 
+`skip_backend_migration` and `skip_frontend_checks` (both default `false`) skip
+that job. Set one only when the caller has proof that the exact tree of the
+commit already passed the same or a broader check, for example in pull
+request CI on a merge commit whose tree equals the tested one; when in doubt,
+leave it `false`. `build-release` runs only when each check job succeeded or
+was skipped because its input asked for it; a failed, cancelled or
+unrequested skip of either builds nothing. The Telegram status leaves out a
+job its input skipped, as it does for `backend-full-tests`.
+
 ## Inputs
 
 | Input | Required | Default |
@@ -43,6 +52,8 @@ that check when resolving a release run.
 | `frontend_lockfile` | yes | |
 | `run_backend_full_tests` | no | `true` |
 | `backend_shards_json` | yes | |
+| `skip_backend_migration` | no | `false` |
+| `skip_frontend_checks` | no | `false` |
 | `backend_ci_command` | yes | |
 | `migration_check_command` | yes | |
 | `frontend_ci_command` | yes | |
