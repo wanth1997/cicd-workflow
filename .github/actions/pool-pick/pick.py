@@ -49,7 +49,9 @@ import tempfile
 
 STALE_SECONDS = 120
 CLASSES = ("heavy", "light")
-HOST_RE = re.compile(r"^(pc|srv([2-9]|[1-9][0-9]+)?)$")
+# A host id is checked by format only: POOL_HOSTS names the hosts that exist,
+# so a new or renamed host needs no change here. Uppercase is refused.
+HOST_RE = re.compile(r"^[a-z][a-z0-9]*$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 STATES = ("accepting", "paused", "held", "draining")
 FILLS = ("spread", "prefer")
@@ -105,16 +107,17 @@ def runs_on_value(text, name):
 
 def read_inputs():
     raw_mode = env("POOL_MODE") or "auto"
-    hosts = split_list(env("POOL_HOSTS") or "pc,srv")
+    hosts = split_list(env("POOL_HOSTS") or "win,ubuntu")
     if not hosts or len(set(hosts)) != len(hosts) or not all(HOST_RE.match(h) for h in hosts):
-        raise InputError("hosts must be a comma-separated list of distinct host ids (pc, srv, srv2, ...)")
+        raise InputError("hosts must be a comma-separated list of distinct host ids, each lowercase letters "
+                         "and digits starting with a letter (win, ubuntu, ubuntu2, ...)")
     if raw_mode not in ("auto", "pool", "github") and raw_mode not in hosts:
         raise InputError(f"mode must be unset, auto, pool, github or one of {', '.join(hosts)} "
                          "(delete the variable for auto)")
     classes = split_list(env("POOL_CLASSES") or "heavy,light")
     if not classes or len(set(classes)) != len(classes) or not set(classes) <= set(CLASSES):
         raise InputError("classes must be heavy, light or heavy,light")
-    prefer = env("POOL_PREFER") or ("srv" if "srv" in hosts else hosts[0])
+    prefer = env("POOL_PREFER") or ("ubuntu" if "ubuntu" in hosts else hosts[0])
     if prefer not in hosts:
         raise InputError(f"prefer must be one of {', '.join(hosts)}")
     fill = env("POOL_FILL") or "spread"

@@ -17,9 +17,9 @@ inputs:
     required: false
     default: ""
   hosts:
-    description: "Comma-separated host ids to read, in tie-break order after prefer."
+    description: "Comma-separated host ids to read, in tie-break order after prefer. An id is lowercase letters and digits, starting with a letter."
     required: false
-    default: "pc,srv"
+    default: "win,ubuntu"
   classes:
     description: "Classes the workflow uses: heavy, light or heavy,light."
     required: false
@@ -33,7 +33,7 @@ inputs:
     required: false
     default: "ubuntu-latest"
   prefer:
-    description: "Host that wins a tie, that fill prefer fills first, and that mode pool waits on when no host is accepting. Empty: srv, or the first of hosts without srv."
+    description: "Host that wins a tie, that fill prefer fills first, and that mode pool waits on when no host is accepting. Empty: ubuntu, or the first of hosts without ubuntu."
     required: false
     default: ""
   fill:
@@ -59,7 +59,7 @@ inputs:
 
 outputs:
   runner:
-    description: "The pick: a host id (pc, srv, ...) or github."
+    description: "The pick: a host id (win, ubuntu, ...) or github."
     value: ${{ steps.pick.outputs.runner }}
   runs_on_heavy:
     description: "JSON for runs-on of heavy jobs (use with fromJSON)."
