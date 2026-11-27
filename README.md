@@ -47,12 +47,12 @@ in the consuming service repository.
 
 ## Pool Actions
 
-A pool is a set of self-hosted hosts (`pc`, `srv`, `srv2`, ...) whose
-runners carry exactly one label, `pool-<host>-<class>`, with class `heavy` or
-`light`. Each host publishes its status every 30 seconds as a JSON document
-(status format version 1) in a repository variable `POOL_STATUS_<HOST>` of a
-private status repository. Callers pin both actions by a 40-character commit
-SHA.
+A pool is a set of self-hosted hosts (`win`, `ubuntu`, `ubuntu2`, ...; a host
+id is lowercase letters and digits, starting with a letter) whose runners
+carry exactly one label, `pool-<host>-<class>`, with class `heavy` or `light`.
+Each host publishes its status every 30 seconds as a JSON document (status
+format version 1) in a repository variable `POOL_STATUS_<HOST>` of a private
+status repository. Callers pin both actions by a 40-character commit SHA.
 
 ### `pool-pick`
 
@@ -132,10 +132,10 @@ it, "Re-run all jobs" picks again.
 | `mode` | `auto` when empty | `auto`, `pool`, `github`, or a host id from `hosts` |
 | `token` | empty | read-only token (below); empty means GitHub-hosted |
 | `status-repo` | none, required unless `mode` is `github` | `owner/name` of the status repository |
-| `hosts` | `pc,srv` | host ids to read, `POOL_STATUS_<HOST>` each |
+| `hosts` | `win,ubuntu` | host ids to read, `POOL_STATUS_<HOST>` each; any lowercase id (`^[a-z][a-z0-9]*$`) except `auto`, `pool` and `github`, no fixed list |
 | `classes` | `heavy,light` | classes the workflow uses |
 | `github-heavy`, `github-light` | `ubuntu-latest` | GitHub-hosted `runs-on`: a label or a JSON array of labels |
-| `prefer` | `srv`, or the first of `hosts` without `srv` | wins ties; `fill: prefer` fills it first; `pool` waits on it when no host is accepting |
+| `prefer` | `ubuntu`, or the first of `hosts` without `ubuntu` | wins ties; `fill: prefer` fills it first; `pool` waits on it when no host is accepting |
 | `fill` | `spread` when empty | `spread`: most free slots first; `prefer`: `prefer` first while it has a free slot (rule 6); anything else fails the step |
 | `max-backlog` | empty: always queue | GitHub-hosted when more than N jobs would wait |
 | `runner-group-id` | none, required for a pool pick | the repository's runner group id in its organization (a positive integer); missing or invalid means GitHub-hosted |
@@ -144,7 +144,7 @@ it, "Re-run all jobs" picks again.
 
 | output | meaning |
 |---|---|
-| `runner` | `pc`, `srv`, ... or `github` |
+| `runner` | `win`, `ubuntu`, ... or `github` |
 | `runs_on_heavy`, `runs_on_light` | JSON for `runs-on`: `"pool-<host>-<class>"`, or the GitHub-hosted value |
 | `reason` | one line: why |
 
@@ -173,7 +173,7 @@ container on a pool runner), as a notice (a warning when `oom_kill` is above
 0) and in the job summary, and never fails the job:
 
 ```text
-pool-evidence: runner=pool-pc-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=2600 limit_mb=4096 failcnt=12 oom_kill=0
+pool-evidence: runner=pool-win-heavy-example-app-1234 pool=yes cgroup=v2 peak_mb=2600 limit_mb=4096 failcnt=12 oom_kill=0
 ```
 
 | output | cgroup v2 | cgroup v1 |
