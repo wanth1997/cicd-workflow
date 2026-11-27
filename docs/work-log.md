@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-11-27 16:30 — pool-pick 只檢查主機 id 格式，預設主機改 win,ubuntu（v0.13.0）
+
+**改動摘要：** `pool-pick` 的主機 id 改成只檢查格式（小寫字母開頭的小寫字母與數字，不能是 `auto`、`pool`、`github`），不再寫死 `pc`／`srv`；`hosts` 預設改 `win,ubuntu`、`prefer` 預設 `ubuntu`（沒有時取第一個）；fixture、測試與 README 跟著改名。
+
+**修改的檔案：**
+- `.github/actions/pool-pick/pick.py`、`action.yml` — `HOST_RE` 改格式檢查、保留字、預設值
+- `.github/actions/pool-pick/fixtures/`、`test.sh` — 新 id 的 fixture；切換中途 `pc,ubuntu`、格式與保留字被拒的案例
+- `.github/actions/pool-evidence/test.sh` — 範例 runner 名稱
+- `README.md` — hosts／prefer 說明
+
+**原因/備註：** runner 池主機改名 `pc`／`srv` → `win`／`ubuntu`（WAN-1034）。沒明寫 `hosts` 的呼叫端換到這版會讀 `win,ubuntu`；現有呼叫端都明寫，會在改名的呼叫端步驟一起改。
+
+---
+
 ## 2026-11-22 18:55 — 建立 agent 文件並同步 reusable workflow 契約與範例
 
 **改動摘要：** 新增公開安全邊界內的 `AGENTS.md`、`CLAUDE.md`、`docs/project-brief.md` 與 `docs/work-log.md`，`.gitignore` 補列 `.DS_Store`，同步所有 reusable workflow 文件狀態為 `active`、補齊缺少的 Inputs/Artifacts 表、統一範例 tag 至 `@v0.11.1`，並精簡 `docs/service-onboarding-cookbook.md` 的重複 YAML 與補齊 Go 規格。
