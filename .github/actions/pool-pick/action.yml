@@ -17,7 +17,7 @@ inputs:
     required: false
     default: ""
   hosts:
-    description: "Comma-separated host ids to read, in tie-break order after prefer. An id is lowercase letters and digits, starting with a letter."
+    description: "Comma-separated host ids to read, in tie-break order after prefer. An id is lowercase letters and digits, starting with a letter, and not auto, pool or github."
     required: false
     default: "win,ubuntu"
   classes:

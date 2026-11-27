@@ -259,6 +259,15 @@ for bad in PC win,PC Win,ubuntu UBUNTU 2win win,pool-x win_2 'win ubuntu' win.2;
     fail "hosts $bad: no hosts error"$'\n'"$out"
   no_lookup "hosts $bad"
 done
+# auto, pool and github are modes (github is also a pick): never a host id.
+for bad in win,github github auto pool pool,ubuntu ubuntu,auto; do
+  pick POOL_HOSTS="$bad"
+  cases=$((cases + 1))
+  [[ "$code" == 1 && -z "$got" ]] || fail "hosts $bad (a reserved id) was accepted: exit $code, runner '$got'"
+  grep -qF '::error title=pool-pick::hosts must not use auto, pool or github as a host id (they are modes; github is also a pick)' <<<"$out" ||
+    fail "hosts $bad: no reserved-id error"$'\n'"$out"
+  no_lookup "hosts $bad"
+done
 # An id with no status variable (a typo, a host not published yet) is unreadable: GitHub-hosted.
 pick POOL_HOSTS=win,wim
 want "hosts with an id that has no status" github

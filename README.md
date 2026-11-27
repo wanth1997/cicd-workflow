@@ -132,7 +132,7 @@ it, "Re-run all jobs" picks again.
 | `mode` | `auto` when empty | `auto`, `pool`, `github`, or a host id from `hosts` |
 | `token` | empty | read-only token (below); empty means GitHub-hosted |
 | `status-repo` | none, required unless `mode` is `github` | `owner/name` of the status repository |
-| `hosts` | `win,ubuntu` | host ids to read, `POOL_STATUS_<HOST>` each; any lowercase id (`^[a-z][a-z0-9]*$`), no fixed list |
+| `hosts` | `win,ubuntu` | host ids to read, `POOL_STATUS_<HOST>` each; any lowercase id (`^[a-z][a-z0-9]*$`) except `auto`, `pool` and `github`, no fixed list |
 | `classes` | `heavy,light` | classes the workflow uses |
 | `github-heavy`, `github-light` | `ubuntu-latest` | GitHub-hosted `runs-on`: a label or a JSON array of labels |
 | `prefer` | `ubuntu`, or the first of `hosts` without `ubuntu` | wins ties; `fill: prefer` fills it first; `pool` waits on it when no host is accepting |
